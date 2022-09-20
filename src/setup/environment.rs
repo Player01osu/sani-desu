@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use super::EnvironmentVars;
+use super::{get_env, EnvVars};
 
 /// Checks if directory exists within array,
 /// if not, return first.
@@ -19,7 +19,7 @@ fn init_path(check_path: Vec<String>) -> String {
     // Default: Creates directory and/or file.
     let default_path = check_path.first().unwrap();
     // String parses to create directory, then file when needed.
-    let default_path = if check_path.first().unwrap().contains(".json") {
+    let default_path = if default_path.contains(".json") || default_path.contains(".yaml") {
         let n = default_path.as_str().chars().fold(0, |mut i, c| {
             if c == '/' {
                 i += 1;
@@ -42,7 +42,7 @@ fn init_path(check_path: Vec<String>) -> String {
         }
         fs::create_dir_all(Path::new(&dir)).unwrap();
         File::create(&default_path).unwrap();
-        dir
+        default_path.to_owned()
     } else {
         fs::create_dir_all(Path::new(&default_path)).unwrap();
         default_path.to_owned()
@@ -51,16 +51,7 @@ fn init_path(check_path: Vec<String>) -> String {
     default_path
 }
 
-fn get_env(env: &str) -> String {
-    env::var(env)
-        .map(|s| {
-            let s = s.trim_end_matches('/');
-            s.to_owned()
-        })
-        .unwrap_or_else(|_| String::new())
-}
-
-impl EnvironmentVars {
+impl EnvVars {
     pub fn new() -> Self {
         let home = get_env("HOME");
 
@@ -82,9 +73,9 @@ impl EnvironmentVars {
         let config = match option_env!("SANI_CONFIG") {
             Some(v) => v.to_owned(),
             None => init_path(vec![
-                format!("{xdg_config_home}/sani/config.json"),
-                format!("{xdg_config_home}/sani_config.json"),
-                format!("{home}/sani_config.json"),
+                format!("{xdg_config_home}/sani/config.yaml"),
+                format!("{xdg_config_home}/sani_config.yaml"),
+                format!("{home}/sani_config.yaml"),
             ]),
         };
 
