@@ -6,12 +6,14 @@ use cache::{Cache, CacheAnimeInfo};
 use serde::{Deserialize, Serialize};
 use setup::{Config, DmenuSettings, EnvVars};
 use std::{
-    thread,
     fs::{self, DirEntry, File},
     os::unix::{prelude::OwnedFd, process::CommandExt},
     path::Path,
     process::{self, Child, ChildStderr, Command, ExitCode, Stdio},
-    rc::Rc, time::Duration, thread::Thread,
+    rc::Rc,
+    thread,
+    thread::{JoinHandle, Thread},
+    time::Duration,
 };
 
 struct Sani<'setup> {
@@ -77,7 +79,7 @@ impl From<&DmenuSettings> for Args {
 pub enum AppState {
     ShowSelect,
     EpSelect,
-    Watching(Option<String>),
+    Watching(Rc<JoinHandle<()>>),
     Quit(exitcode::ExitCode),
 }
 
@@ -96,33 +98,34 @@ impl<'setup> Sani<'setup> {
 
     fn select_show(&mut self, mut anime_list: &str, args: &Args) {
         // FIXME: Pipe directly from string rather than calling echo.
-        let pipe = Command::new("echo")
+        let mut pipe = Command::new("echo")
             .arg(&mut anime_list)
             .stdout(Stdio::piped())
             .spawn()
-            .unwrap()
-            .stdout
             .unwrap();
 
         // TODO: State machine to manage show selection and ep selection
-        let show_selection = Command::new("dmenu")
-            .stdin(pipe)
-            .args(args.args.clone())
-            .output()
-            .unwrap();
+        if let Some(pipe) = pipe.stdout.take() {
+            let show_selection = Command::new("dmenu")
+                .stdin(pipe)
+                .args(args.args.clone())
+                .output()
+                .unwrap();
 
-        // FIXME: Pipe directly from string rather than calling echo.
-        let sel = String::from_utf8(show_selection.stdout).unwrap();
-        let sel = sel.trim();
-        self.anime_sel = Some(sel.to_owned());
+            // FIXME: Pipe directly from string rather than calling echo.
+            let sel = String::from_utf8(show_selection.stdout).unwrap();
+            let sel = sel.trim();
+            self.anime_sel = Some(sel.to_owned());
 
-        dbg!(&sel);
+            dbg!(&sel);
 
-        if sel.is_empty() {
-            self.state = AppState::Quit(exitcode::OK);
-        } else {
-            self.state = AppState::EpSelect;
+            if sel.is_empty() {
+                self.state = AppState::Quit(exitcode::OK);
+            } else {
+                self.state = AppState::EpSelect;
+            }
         }
+        pipe.wait().unwrap();
     }
 
     fn select_ep(&mut self, args: &Args) {
@@ -145,85 +148,124 @@ impl<'setup> Sani<'setup> {
         let mut ep_list = ep_list.trim();
         dbg!(ep_list);
 
-        let pipe = Command::new("echo")
+        let mut pipe = Command::new("echo")
             .arg(&mut ep_list)
             .stdout(Stdio::piped())
             .spawn()
-            .unwrap()
-            .stdout
             .unwrap();
 
-        let ep_sel = Command::new("dmenu")
-            .stdin(pipe)
-            .args(args.args.clone())
-            .output()
-            .unwrap();
-        let ep_sel = String::from_utf8(ep_sel.stdout).unwrap();
-        if ep_sel.trim().is_empty() {
-            self.state = AppState::ShowSelect;
-        } else {
-            let ep_sel = format!(
-                "{}/{}/{}",
-                self.config.anime_dir.first().unwrap(),
-                self.anime_sel.as_ref().unwrap(),
-                ep_sel.trim()
-            );
-            match fork::fork() {
-                Ok(fork::Fork::Parent(child)) => {
-                    self.child_pid = child;
-                    self.state = AppState::Watching(Some(ep_sel))
-                }
-                Ok(fork::Fork::Child) => self.state = AppState::Watching(None),
-                Err(e) => eprintln!("{e}"),
+        if let Some(pipe) = pipe.stdout.take() {
+            let ep_sel = Command::new("dmenu")
+                .stdin(pipe)
+                .args(args.args.clone())
+                .output()
+                .unwrap();
+            let ep_sel = String::from_utf8(ep_sel.stdout).unwrap();
+            if ep_sel.trim().is_empty() {
+                self.state = AppState::ShowSelect;
+            } else {
+                let ep_sel = format!(
+                    "{}/{}/{}",
+                    self.config.anime_dir.first().unwrap(),
+                    self.anime_sel.as_ref().unwrap(),
+                    ep_sel.trim()
+                );
+
+                let join_handle = thread::spawn(move || {
+                    let mut args: Vec<&str> = Vec::new();
+                    args.push(&ep_sel);
+                    args.push("--input-ipc-server=/tmp/mpvsocket");
+
+                    Command::new("mpv")
+                        .args(&args)
+                        .spawn()
+                        .unwrap()
+                        .wait()
+                        .unwrap();
+                });
+                self.state = AppState::Watching(Rc::new(join_handle));
             }
+            //match fork::fork() {
+            //    Ok(fork::Fork::Parent(child)) => {
+            //        self.child_pid = child;
+            //        self.state = AppState::Watching(Some(ep_sel))
+            //    }
+            //    Ok(fork::Fork::Child) => self.state = AppState::Watching(None),
+            //    Err(e) => eprintln!("{e}"),
+            //}
             //dbg!(&watch_state);
         }
+        pipe.wait().unwrap();
     }
 
-    fn watching(&mut self, handle: &Option<String>) {
-        let finished = match handle {
-            Some(ep) => {
-                let mut args: Vec<&str> = Vec::new();
-                args.push(ep);
-                args.push("--input-ipc-server=/tmp/mpvsocket");
-
-                Command::new("mpv")
-                    .args(&args)
-                    .spawn()
-                    .unwrap()
-                    .wait()
-                    .unwrap();
-                println!("{}", self.child_pid);
-                unsafe { libc::kill(self.child_pid, 9) };
-                true
-            }
-            None => {
-                let pipe = Command::new("echo")
-                    .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
-                    .stdout(Stdio::piped())
-                    .spawn()
-                    .unwrap()
-                    .stdout
-                    .take()
-                    .unwrap();
-                //File::from(r#"{ "command": ["get_property", "playback-time"] }"#);
-
-                let output = Command::new("socat")
-                    .stdin(pipe)
-                    .args(["-", "/tmp/mpvsocket"])
-                    .spawn()
-                    .unwrap()
-                    .wait_with_output()
-                    .unwrap();
-                std::thread::sleep(Duration::new(2, 0));
-                dbg!(output);
-                //println!("H");
-                false
-            }
-        };
-        if finished {
+    fn watching(&mut self, handle: Rc<JoinHandle<()>>) {
+        if handle.is_finished() {
             self.state = AppState::EpSelect;
         }
+
+        let mut pipe = Command::new("echo")
+            .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        //File::from(r#"{ "command": ["get_property", "playback-time"] }"#);
+
+        if let Some(pipe) = pipe.stdout.take() {
+            let output = Command::new("socat")
+                .stdin(pipe)
+                .args(["-", "/tmp/mpvsocket"])
+                .spawn()
+                .unwrap()
+                .wait_with_output()
+                .unwrap();
+            dbg!(output);
+        }
+        pipe.wait().unwrap();
+        std::thread::sleep(Duration::new(2, 0));
+
+        //let finished = match handle {
+        //    Some(ep) => {
+        //        let mut args: Vec<&str> = Vec::new();
+        //        args.push(ep);
+        //        args.push("--input-ipc-server=/tmp/mpvsocket");
+
+        //        Command::new("mpv")
+        //            .args(&args)
+        //            .spawn()
+        //            .unwrap()
+        //            .wait()
+        //            .unwrap();
+        //        println!("{}", self.child_pid);
+        //        unsafe { libc::kill(self.child_pid, 9) };
+        //        true
+        //    }
+        //    None => {
+        //        let pipe = Command::new("echo")
+        //            .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
+        //            .stdout(Stdio::piped())
+        //            .spawn()
+        //            .unwrap()
+        //            .stdout
+        //            .take()
+        //            .unwrap();
+        //        //File::from(r#"{ "command": ["get_property", "playback-time"] }"#);
+
+        //        let output = Command::new("socat")
+        //            .stdin(pipe)
+        //            .args(["-", "/tmp/mpvsocket"])
+        //            .spawn()
+        //            .unwrap()
+        //            .wait_with_output()
+        //            .unwrap();
+        //        std::thread::sleep(Duration::new(2, 0));
+        //        dbg!(output);
+        //        //println!("H");
+        //        false
+        //    }
+        //};
+        //if finished {
+        //    self.state = AppState::EpSelect;
+        //}
     }
 
     pub fn start(config: &Config, env: &EnvVars) -> Result<i32, i32> {
@@ -250,7 +292,7 @@ impl<'setup> Sani<'setup> {
             match app.state {
                 AppState::ShowSelect => app.select_show(anime_list, &args),
                 AppState::EpSelect => app.select_ep(&args),
-                AppState::Watching(ref mpv_id) => app.watching(&mpv_id.clone()),
+                AppState::Watching(ref mpv_id) => app.watching(Rc::clone(&mpv_id)),
                 AppState::Quit(exitcode) => match exitcode {
                     exitcode::OK => return Ok(exitcode::OK),
                     _ => return Err(exitcode::USAGE),
