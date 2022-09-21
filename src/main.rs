@@ -6,12 +6,12 @@ use cache::{Cache, CacheAnimeInfo};
 use serde::{Deserialize, Serialize};
 use setup::{Config, DmenuSettings, EnvVars};
 use std::{
-    cell::Ref,
+    thread,
     fs::{self, DirEntry, File},
     os::unix::{prelude::OwnedFd, process::CommandExt},
     path::Path,
     process::{self, Child, ChildStderr, Command, ExitCode, Stdio},
-    rc::Rc, time::Duration,
+    rc::Rc, time::Duration, thread::Thread,
 };
 
 struct Sani<'setup> {
@@ -186,7 +186,7 @@ impl<'setup> Sani<'setup> {
                 let mut args: Vec<&str> = Vec::new();
                 args.push(ep);
                 args.push("--input-ipc-server=/tmp/mpvsocket");
-                //args.push("
+
                 Command::new("mpv")
                     .args(&args)
                     .spawn()

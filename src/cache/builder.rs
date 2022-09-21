@@ -1,4 +1,5 @@
 use super::CacheAnimeInfo;
+use anyhow::Result;
 
 #[derive(Default)]
 pub struct CacheAnimeInfoBuilder<'cache> {
@@ -6,6 +7,10 @@ pub struct CacheAnimeInfoBuilder<'cache> {
     filename: Option<&'cache str>,
     current_ep: Option<u32>,
     timestamp: Option<&'cache str>,
+}
+
+pub enum CacheAnimeInfoBuilderError<'a> {
+    MissingField(&'a str),
 }
 
 impl<'cache> CacheAnimeInfoBuilder<'cache> {
@@ -29,13 +34,48 @@ impl<'cache> CacheAnimeInfoBuilder<'cache> {
         self
     }
 
-    pub fn finalize(self) -> CacheAnimeInfo<'cache> {
-        CacheAnimeInfo {
-            anime_name: self.anime_name.unwrap(),
-            filename: self.filename.unwrap(),
-            current_ep: self.current_ep.unwrap(),
-            timestamp: self.timestamp.unwrap(),
-        }
+    pub fn finalize(self) -> Result<CacheAnimeInfo<'cache>, CacheAnimeInfoBuilderError<'cache>> {
+        let anime_name = match self.anime_name {
+            Some(v) => v,
+            None => {
+                return Err(CacheAnimeInfoBuilderError::MissingField(
+                    "Missing field: anime_name",
+                ))
+            }
+        };
+
+        let filename = match self.filename {
+            Some(v) => v,
+            None => {
+                return Err(CacheAnimeInfoBuilderError::MissingField(
+                    "Missing field: filename",
+                ))
+            }
+        };
+
+        let current_ep = match self.current_ep {
+            Some(v) => v,
+            None => {
+                return Err(CacheAnimeInfoBuilderError::MissingField(
+                    "Missing field: current_ep",
+                ))
+            }
+        };
+
+        let timestamp = match self.timestamp {
+            Some(v) => v,
+            None => {
+                return Err(CacheAnimeInfoBuilderError::MissingField(
+                    "Missing field: timestamp",
+                ))
+            }
+        };
+
+        Ok(CacheAnimeInfo {
+            anime_name,
+            filename,
+            current_ep,
+            timestamp,
+        })
     }
 }
-
