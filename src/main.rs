@@ -203,7 +203,9 @@ impl<'setup> Sani<'setup> {
                     .wait()
                     .unwrap();
                 println!("{}", self.child_pid);
+
                 unsafe { libc::kill(self.child_pid, 9) };
+                nix::sys::wait::wait().unwrap();
                 true
             }
             None => {
