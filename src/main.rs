@@ -6,9 +6,12 @@ use cache::{Cache, CacheAnimeInfo};
 use serde::{Deserialize, Serialize};
 use setup::{Config, DmenuSettings, EnvVars};
 use std::{
-    fs,
+    cell::Ref,
+    fs::{self, DirEntry, File},
+    os::unix::{prelude::OwnedFd, process::CommandExt},
     path::Path,
-    process::{self, Command, ExitCode, Stdio},
+    process::{self, Child, ChildStderr, Command, ExitCode, Stdio},
+    rc::Rc, time::Duration,
 };
 
 struct Sani<'setup> {
@@ -18,6 +21,7 @@ struct Sani<'setup> {
     anime_sel: Option<String>,
     ep_sel: Option<String>,
     state: AppState,
+    child_pid: i32,
 }
 
 struct Args {
@@ -73,7 +77,7 @@ impl From<&DmenuSettings> for Args {
 pub enum AppState {
     ShowSelect,
     EpSelect,
-    Watching,
+    Watching(Option<String>),
     Quit(exitcode::ExitCode),
 }
 
@@ -86,6 +90,7 @@ impl<'setup> Sani<'setup> {
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
+            child_pid: 0,
         }
     }
 
@@ -157,14 +162,67 @@ impl<'setup> Sani<'setup> {
         if ep_sel.trim().is_empty() {
             self.state = AppState::ShowSelect;
         } else {
-            self.state = AppState::Watching;
             let ep_sel = format!(
                 "{}/{}/{}",
                 self.config.anime_dir.first().unwrap(),
                 self.anime_sel.as_ref().unwrap(),
                 ep_sel.trim()
             );
-            Command::new("mpv").arg(ep_sel).spawn().unwrap();
+            match fork::fork() {
+                Ok(fork::Fork::Parent(child)) => {
+                    self.child_pid = child;
+                    self.state = AppState::Watching(Some(ep_sel))
+                }
+                Ok(fork::Fork::Child) => self.state = AppState::Watching(None),
+                Err(e) => eprintln!("{e}"),
+            }
+            //dbg!(&watch_state);
+        }
+    }
+
+    fn watching(&mut self, handle: &Option<String>) {
+        let finished = match handle {
+            Some(ep) => {
+                let mut args: Vec<&str> = Vec::new();
+                args.push(ep);
+                args.push("--input-ipc-server=/tmp/mpvsocket");
+                //args.push("
+                Command::new("mpv")
+                    .args(&args)
+                    .spawn()
+                    .unwrap()
+                    .wait()
+                    .unwrap();
+                println!("{}", self.child_pid);
+                unsafe { libc::kill(self.child_pid, 9) };
+                true
+            }
+            None => {
+                let pipe = Command::new("echo")
+                    .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .unwrap()
+                    .stdout
+                    .take()
+                    .unwrap();
+                //File::from(r#"{ "command": ["get_property", "playback-time"] }"#);
+
+                let output = Command::new("socat")
+                    .stdin(pipe)
+                    .args(["-", "/tmp/mpvsocket"])
+                    .spawn()
+                    .unwrap()
+                    .wait_with_output()
+                    .unwrap();
+                std::thread::sleep(Duration::new(2, 0));
+                dbg!(output);
+                //println!("H");
+                false
+            }
+        };
+        if finished {
+            self.state = AppState::EpSelect;
         }
     }
 
@@ -192,13 +250,11 @@ impl<'setup> Sani<'setup> {
             match app.state {
                 AppState::ShowSelect => app.select_show(anime_list, &args),
                 AppState::EpSelect => app.select_ep(&args),
-                AppState::Watching => (),
-                AppState::Quit(exitcode) => {
-                    match exitcode {
-                        exitcode::OK => return Ok(exitcode::OK),
-                        _ => return Err(exitcode::USAGE),
-                    }
-                }
+                AppState::Watching(ref mpv_id) => app.watching(&mpv_id.clone()),
+                AppState::Quit(exitcode) => match exitcode {
+                    exitcode::OK => return Ok(exitcode::OK),
+                    _ => return Err(exitcode::USAGE),
+                },
             }
         }
         // Cache anime dir

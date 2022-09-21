@@ -5,7 +5,7 @@ pub struct CacheAnimeInfoBuilder<'cache> {
     anime_name: Option<&'cache str>,
     filename: Option<&'cache str>,
     current_ep: Option<u32>,
-    timestamp: Option<u64>,
+    timestamp: Option<&'cache str>,
 }
 
 impl<'cache> CacheAnimeInfoBuilder<'cache> {
@@ -24,7 +24,7 @@ impl<'cache> CacheAnimeInfoBuilder<'cache> {
         self
     }
 
-    pub fn timestamp(mut self, timestamp: u64) -> Self {
+    pub fn timestamp(mut self, timestamp: &'cache str) -> Self {
         self.timestamp = Some(timestamp);
         self
     }

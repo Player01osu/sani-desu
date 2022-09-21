@@ -18,7 +18,7 @@ pub struct CacheAnimeInfo<'cache> {
     anime_name: &'cache str,
     filename: &'cache str,
     current_ep: u32,
-    timestamp: u64,
+    timestamp: &'cache str,
 }
 impl<'cache> CacheAnimeInfo<'cache> {
     pub fn builder() -> CacheAnimeInfoBuilder<'cache> {

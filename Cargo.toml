@@ -10,6 +10,8 @@ lto = true
 [dependencies]
 anyhow = "*"
 exitcode = "*"
+fork = "*"
+libc = "*"
 serde = { version = "*", features = ["derive"] }
 serde_yaml = "*"
 serde_json = "*"
