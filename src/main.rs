@@ -12,9 +12,11 @@ use std::{
 };
 
 struct Sani<'setup> {
+    cache: Cache<'setup>,
     config: &'setup Config,
     env: &'setup EnvVars,
-    cache: Cache<'setup>,
+    anime_sel: Option<String>,
+    ep_sel: Option<String>,
     state: AppState,
 }
 
@@ -35,6 +37,10 @@ impl From<&DmenuSettings> for Args {
 
         if dmenu_settings.bottom == true {
             args.push("-b".to_string());
+        }
+
+        if dmenu_settings.case_insensitive {
+            args.push("-i".to_string());
         }
 
         if let Some(font) = &dmenu_settings.font {
@@ -67,6 +73,8 @@ impl From<&DmenuSettings> for Args {
 pub enum AppState {
     ShowSelect,
     EpSelect,
+    Watching,
+    Quit(exitcode::ExitCode),
 }
 
 impl<'setup> Sani<'setup> {
@@ -75,28 +83,13 @@ impl<'setup> Sani<'setup> {
             config: &config,
             env: &env,
             cache: Cache::new(env.cache.as_str()),
+            anime_sel: None,
+            ep_sel: None,
             state: AppState::ShowSelect,
         }
     }
 
-    pub fn start(config: &Config, env: &EnvVars) -> Result<(), ExitCode> {
-        let app = Sani::new(config, env);
-
-        // FIXME: Make more efficient
-        let mut anime_list = String::new();
-        let list = app
-            .config
-            .anime_dir
-            .iter()
-            .map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().file_name()))
-            .flatten();
-        for i in list {
-            anime_list.push_str(&format!("{}\n", i.to_str().unwrap()));
-        }
-        let mut anime_list = anime_list.trim();
-
-        //dbg!(&anime_list);
-
+    fn select_show(&mut self, mut anime_list: &str, args: &Args) {
         // FIXME: Pipe directly from string rather than calling echo.
         let pipe = Command::new("echo")
             .arg(&mut anime_list)
@@ -105,11 +98,8 @@ impl<'setup> Sani<'setup> {
             .unwrap()
             .stdout
             .unwrap();
-        let dmenu_settings = &app.config.dmenu_settings;
 
-        // FIXME: Dont clone the args
-        let args = Args::from(dmenu_settings);
-
+        // TODO: State machine to manage show selection and ep selection
         let show_selection = Command::new("dmenu")
             .stdin(pipe)
             .args(args.args.clone())
@@ -119,16 +109,27 @@ impl<'setup> Sani<'setup> {
         // FIXME: Pipe directly from string rather than calling echo.
         let sel = String::from_utf8(show_selection.stdout).unwrap();
         let sel = sel.trim();
+        self.anime_sel = Some(sel.to_owned());
 
         dbg!(&sel);
+
+        if sel.is_empty() {
+            self.state = AppState::Quit(exitcode::OK);
+        } else {
+            self.state = AppState::EpSelect;
+        }
+    }
+
+    fn select_ep(&mut self, args: &Args) {
         // FIXME: Make more efficient
         let mut ep_list = String::new();
-        let list = app
+        let anime_sel = self.anime_sel.as_ref().unwrap();
+        let list = self
             .config
             .anime_dir
             .iter()
             .map(|v| {
-                fs::read_dir(&format!("{v}/{sel}"))
+                fs::read_dir(&format!("{v}/{}", &anime_sel))
                     .unwrap()
                     .map(|d| d.unwrap().file_name())
             })
@@ -149,22 +150,59 @@ impl<'setup> Sani<'setup> {
 
         let ep_sel = Command::new("dmenu")
             .stdin(pipe)
-            .args(args.args)
+            .args(args.args.clone())
             .output()
             .unwrap();
         let ep_sel = String::from_utf8(ep_sel.stdout).unwrap();
-        let ep_sel = format!(
-            "{}/{}/{}",
-            app.config.anime_dir.first().unwrap(),
-            sel,
-            ep_sel.trim()
-        );
+        if ep_sel.trim().is_empty() {
+            self.state = AppState::ShowSelect;
+        } else {
+            self.state = AppState::Watching;
+            let ep_sel = format!(
+                "{}/{}/{}",
+                self.config.anime_dir.first().unwrap(),
+                self.anime_sel.as_ref().unwrap(),
+                ep_sel.trim()
+            );
+            Command::new("mpv").arg(ep_sel).spawn().unwrap();
+        }
+    }
 
-        Command::new("mpv").arg(ep_sel).spawn().unwrap();
+    pub fn start(config: &Config, env: &EnvVars) -> Result<i32, i32> {
+        let mut app = Sani::new(config, env);
 
+        // FIXME: Make more efficient
+        let mut anime_list = String::new();
+        let list = app
+            .config
+            .anime_dir
+            .iter()
+            .map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().file_name()))
+            .flatten();
+        for i in list {
+            anime_list.push_str(&format!("{}\n", i.to_str().unwrap()));
+        }
+        let anime_list = anime_list.trim();
+
+        let dmenu_settings = &app.config.dmenu_settings;
+        // FIXME: Dont clone the args
+        let args = Args::from(dmenu_settings);
+
+        loop {
+            match app.state {
+                AppState::ShowSelect => app.select_show(anime_list, &args),
+                AppState::EpSelect => app.select_ep(&args),
+                AppState::Watching => (),
+                AppState::Quit(exitcode) => {
+                    match exitcode {
+                        exitcode::OK => return Ok(exitcode::OK),
+                        _ => return Err(exitcode::USAGE),
+                    }
+                }
+            }
+        }
         // Cache anime dir
         //
-        Ok(())
     }
 
     fn cache(&self) {
@@ -206,15 +244,7 @@ fn main() {
     let config = Config::generate(&env);
 
     match Sani::start(&config, &env) {
-        Ok(_) => (),
-        Err(_) => (),
+        Ok(v) => process::exit(v),
+        Err(e) => process::exit(e),
     };
-    //let ls = Command::new("/bin/ls")
-    //    .stdout(Stdio::piped())
-    //    .spawn()
-    //    App::start();
-    //    .unwrap()
-    //    .stdout
-    //    .unwrap();
-    //let child = Command::new("dmenu").stdin(ls).spawn().unwrap();
 }
