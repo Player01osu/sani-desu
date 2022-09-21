@@ -30,7 +30,6 @@ fn default_anime_dir() -> Vec<String> {
 }
 
 fn skip_empty(t: &Option<String>) -> bool {
-    dbg!(t);
     if let Some(s) = t {
         return s.is_empty()
     } else {
@@ -46,12 +45,16 @@ fn default_lines() -> u32 {
     15
 }
 
+fn default_case_insensitive() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DmenuSettings {
     pub font: Option<String>,
     #[serde(default)]
     pub bottom: bool,
-    #[serde(default)]
+    #[serde(default = "default_case_insensitive")]
     pub case_insensitive: bool,
     #[serde(default = "default_height")]
     pub height: u32,
@@ -86,7 +89,7 @@ impl Default for DmenuSettings {
         Self {
             font: None,
             bottom: false,
-            case_insensitive: false,
+            case_insensitive: true,
             height: 24,
             lines: 15,
             monitor: 0,

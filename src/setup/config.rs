@@ -41,7 +41,6 @@ impl Config {
         }
     }
     pub fn generate(env: &EnvVars) -> Self {
-        dbg!(&env.config);
         let mut conf_file = File::options()
             .create(true)
             .write(true)
@@ -60,7 +59,6 @@ impl Config {
                 Config::default()
             }
         };
-        dbg!(&d);
         d
     }
 }
