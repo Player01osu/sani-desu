@@ -79,7 +79,7 @@ impl From<&DmenuSettings> for Args {
 pub enum AppState {
     ShowSelect,
     EpSelect,
-    Watching(Rc<JoinHandle<()>>),
+    Watching(Rc<Option<String>>),
     Quit(exitcode::ExitCode),
 }
 
@@ -147,7 +147,6 @@ impl<'setup> Sani<'setup> {
         }
         let mut ep_list = ep_list.trim();
         dbg!(ep_list);
-
         let mut pipe = Command::new("echo")
             .arg(&mut ep_list)
             .stdout(Stdio::piped())
@@ -171,101 +170,69 @@ impl<'setup> Sani<'setup> {
                     ep_sel.trim()
                 );
 
-                let join_handle = thread::spawn(move || {
-                    let mut args: Vec<&str> = Vec::new();
-                    args.push(&ep_sel);
-                    args.push("--input-ipc-server=/tmp/mpvsocket");
-
-                    Command::new("mpv")
-                        .args(&args)
-                        .spawn()
-                        .unwrap()
-                        .wait()
-                        .unwrap();
-                });
-                self.state = AppState::Watching(Rc::new(join_handle));
+                match fork::fork() {
+                    Ok(fork::Fork::Parent(child)) => {
+                        self.child_pid = child;
+                        self.state = AppState::Watching(Rc::new(Some(ep_sel)))
+                    }
+                    Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
+                    Err(e) => eprintln!("{e}"),
+                };
             }
-            //match fork::fork() {
-            //    Ok(fork::Fork::Parent(child)) => {
-            //        self.child_pid = child;
-            //        self.state = AppState::Watching(Some(ep_sel))
-            //    }
-            //    Ok(fork::Fork::Child) => self.state = AppState::Watching(None),
-            //    Err(e) => eprintln!("{e}"),
-            //}
-            //dbg!(&watch_state);
         }
-        pipe.wait().unwrap();
+
+        // FIXME: Lmao we do a little error ignoring.
+        // Still tho, why does this panic in child proc?
+        match pipe.wait() {
+            Ok(_) => (),
+            Err(_) => (),
+        }
     }
 
-    fn watching(&mut self, handle: Rc<JoinHandle<()>>) {
-        if handle.is_finished() {
+    fn watching(&mut self, handle: Rc<Option<String>>) {
+        let f = match &*handle {
+            Some(ep) => {
+                let mut args: Vec<&str> = Vec::new();
+                args.push(&ep);
+                args.push("--input-ipc-server=/tmp/mpvsocket");
+
+                Command::new("mpv")
+                    .args(&args)
+                    .spawn()
+                    .unwrap()
+                    .wait()
+                    .unwrap();
+                println!("{}", self.child_pid);
+                unsafe { libc::kill(self.child_pid, 9) };
+                true
+            }
+            None => {
+                println!("e");
+                let mut pipe = Command::new("echo")
+                    .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+
+                if let Some(pipe) = pipe.stdout.take() {
+                    let output = Command::new("socat")
+                        .stdin(pipe)
+                        .args(["-", "/tmp/mpvsocket"])
+                        .spawn()
+                        .unwrap()
+                        .wait_with_output()
+                        .unwrap();
+                    std::thread::sleep(Duration::new(2, 0));
+                    dbg!(output);
+                };
+                pipe.wait().unwrap();
+                false
+            }
+        };
+
+        if f {
             self.state = AppState::EpSelect;
         }
-
-        let mut pipe = Command::new("echo")
-            .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        //File::from(r#"{ "command": ["get_property", "playback-time"] }"#);
-
-        if let Some(pipe) = pipe.stdout.take() {
-            let output = Command::new("socat")
-                .stdin(pipe)
-                .args(["-", "/tmp/mpvsocket"])
-                .spawn()
-                .unwrap()
-                .wait_with_output()
-                .unwrap();
-            dbg!(output);
-        }
-        pipe.wait().unwrap();
-        std::thread::sleep(Duration::new(2, 0));
-
-        //let finished = match handle {
-        //    Some(ep) => {
-        //        let mut args: Vec<&str> = Vec::new();
-        //        args.push(ep);
-        //        args.push("--input-ipc-server=/tmp/mpvsocket");
-
-        //        Command::new("mpv")
-        //            .args(&args)
-        //            .spawn()
-        //            .unwrap()
-        //            .wait()
-        //            .unwrap();
-        //        println!("{}", self.child_pid);
-        //        unsafe { libc::kill(self.child_pid, 9) };
-        //        true
-        //    }
-        //    None => {
-        //        let pipe = Command::new("echo")
-        //            .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
-        //            .stdout(Stdio::piped())
-        //            .spawn()
-        //            .unwrap()
-        //            .stdout
-        //            .take()
-        //            .unwrap();
-        //        //File::from(r#"{ "command": ["get_property", "playback-time"] }"#);
-
-        //        let output = Command::new("socat")
-        //            .stdin(pipe)
-        //            .args(["-", "/tmp/mpvsocket"])
-        //            .spawn()
-        //            .unwrap()
-        //            .wait_with_output()
-        //            .unwrap();
-        //        std::thread::sleep(Duration::new(2, 0));
-        //        dbg!(output);
-        //        //println!("H");
-        //        false
-        //    }
-        //};
-        //if finished {
-        //    self.state = AppState::EpSelect;
-        //}
     }
 
     pub fn start(config: &Config, env: &EnvVars) -> Result<i32, i32> {
