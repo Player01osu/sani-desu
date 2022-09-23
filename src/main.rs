@@ -13,7 +13,7 @@ use std::{
     path::Path,
     process::{self, Command, Stdio},
     rc::Rc,
-    time::Duration,
+    time::Duration, sync::Mutex, cell::RefCell,
 };
 
 struct Sani<'setup> {
@@ -23,6 +23,7 @@ struct Sani<'setup> {
     anime_sel: Option<String>,
     ep_sel: Option<String>,
     state: AppState,
+    mpv_socket: RefCell<Option<io::Result<LocalSocketStream>>>,
     timestamp: u64,
     child_pid: i32,
 }
@@ -81,18 +82,20 @@ pub enum AppState {
     ShowSelect,
     EpSelect,
     Watching(Rc<Option<String>>),
+    WriteCache,
     Quit(exitcode::ExitCode),
 }
 
 impl<'setup> Sani<'setup> {
     fn new(config: &'setup Config, env: &'setup EnvVars) -> Self {
         Self {
-            config: &config,
-            env: &env,
+            config,
+            env,
             cache: Cache::new(env.cache.as_str()),
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
+            mpv_socket: RefCell::new(None),
             timestamp: 0,
             child_pid: 0,
         }
@@ -179,7 +182,9 @@ impl<'setup> Sani<'setup> {
                     self.child_pid = child;
                     self.state = AppState::Watching(Rc::new(Some(ep_sel)))
                 }
-                Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
+                Ok(fork::Fork::Child) => {
+                    self.state = AppState::Watching(Rc::new(None))
+                }
                 Err(e) => eprintln!("{e}"),
             };
         }
@@ -213,9 +218,15 @@ impl<'setup> Sani<'setup> {
             None => {
                 std::thread::sleep(Duration::new(2, 0));
 
-                let socket = LocalSocketStream::connect("/tmp/mpvsocket");
+                let socket = self.mpv_socket.get_mut();
+                if socket.is_none() {
+                    self.mpv_socket = RefCell::new(Some(LocalSocketStream::connect("/tmp/mpvsocket")));
+                }
+
+                let socket = self.mpv_socket.get_mut();
+                let socket = socket.as_mut().unwrap();
                 match socket {
-                    Ok(mut conn) => {
+                    Ok(conn) => {
                         conn.write_all(
                             br#"{"command":["get_property","playback-time"],"request_id":1}"#,
                         )
