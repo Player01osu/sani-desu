@@ -5,25 +5,26 @@ use anyhow::Result;
 use cache::{Cache, CacheAnimeInfo};
 use interprocess::local_socket::LocalSocketStream;
 use nix::{sys, unistd::Pid};
+use rusqlite::{params, Connection};
 use serde_json::Value;
 use setup::{Config, DmenuSettings, EnvVars};
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Write, self},
     path::Path,
     process::{self, Command, Stdio},
     rc::Rc,
-    time::Duration, sync::Mutex, cell::RefCell,
+    time::Duration, cell::RefCell,
 };
 
 struct Sani<'setup> {
-    cache: Cache<'setup>,
+    cache: Cache,
     config: &'setup Config,
     env: &'setup EnvVars,
     anime_sel: Option<String>,
     ep_sel: Option<String>,
     state: AppState,
-    mpv_socket: RefCell<Option<io::Result<LocalSocketStream>>>,
+    mpv_socket: RefCell<io::Result<LocalSocketStream>>,
     timestamp: u64,
     child_pid: i32,
 }
@@ -95,7 +96,7 @@ impl<'setup> Sani<'setup> {
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
-            mpv_socket: RefCell::new(None),
+            mpv_socket: RefCell::new(Err(std::io::Error::new(io::ErrorKind::ConnectionRefused, "Poops"))),
             timestamp: 0,
             child_pid: 0,
         }
@@ -219,12 +220,12 @@ impl<'setup> Sani<'setup> {
                 std::thread::sleep(Duration::new(2, 0));
 
                 let socket = self.mpv_socket.get_mut();
-                if socket.is_none() {
-                    self.mpv_socket = RefCell::new(Some(LocalSocketStream::connect("/tmp/mpvsocket")));
+                if socket.is_err() {
+                    self.mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket"));
                 }
 
                 let socket = self.mpv_socket.get_mut();
-                let socket = socket.as_mut().unwrap();
+                let socket = socket.as_mut();
                 match socket {
                     Ok(conn) => {
                         conn.write_all(
