@@ -3,16 +3,16 @@ mod setup;
 
 use anyhow::Result;
 use cache::{Cache, CacheAnimeInfo};
-use serde::{Deserialize, Serialize};
+use interprocess::local_socket::LocalSocketStream;
+use nix::{sys, unistd::Pid};
+use serde_json::Value;
 use setup::{Config, DmenuSettings, EnvVars};
 use std::{
-    fs::{self, DirEntry, File},
-    os::unix::{prelude::OwnedFd, process::CommandExt},
+    fs,
+    io::{BufRead, BufReader, Write},
     path::Path,
-    process::{self, Child, ChildStderr, Command, ExitCode, Stdio},
+    process::{self, Command, Stdio},
     rc::Rc,
-    thread,
-    thread::{JoinHandle, Thread},
     time::Duration,
 };
 
@@ -23,6 +23,7 @@ struct Sani<'setup> {
     anime_sel: Option<String>,
     ep_sel: Option<String>,
     state: AppState,
+    timestamp: u64,
     child_pid: i32,
 }
 
@@ -92,6 +93,7 @@ impl<'setup> Sani<'setup> {
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
+            timestamp: 0,
             child_pid: 0,
         }
     }
@@ -104,7 +106,6 @@ impl<'setup> Sani<'setup> {
             .spawn()
             .unwrap();
 
-        // TODO: State machine to manage show selection and ep selection
         if let Some(pipe) = pipe.stdout.take() {
             let show_selection = Command::new("dmenu")
                 .stdin(pipe)
@@ -202,32 +203,41 @@ impl<'setup> Sani<'setup> {
                     .unwrap()
                     .wait()
                     .unwrap();
-                println!("{}", self.child_pid);
 
-                unsafe { libc::kill(self.child_pid, 9) };
-                nix::sys::wait::wait().unwrap();
+                let pid = Pid::from_raw(self.child_pid);
+                match sys::signal::kill(pid, sys::signal::SIGKILL) {
+                    Ok(_) => match sys::wait::wait() {
+                        Ok(_) => (),
+                        Err(_) => (),
+                    },
+                    Err(_) => (),
+                }
+
                 true
             }
             None => {
-                println!("e");
-                let mut pipe = Command::new("echo")
-                    .arg(r#"{ "command": ["get_property", "playback-time"] }"#)
-                    .stdout(Stdio::piped())
-                    .spawn()
-                    .unwrap();
+                std::thread::sleep(Duration::new(2, 0));
 
-                if let Some(pipe) = pipe.stdout.take() {
-                    let output = Command::new("socat")
-                        .stdin(pipe)
-                        .args(["-", "/tmp/mpvsocket"])
-                        .spawn()
-                        .unwrap()
-                        .wait_with_output()
+                let socket = LocalSocketStream::connect("/tmp/mpvsocket");
+                match socket {
+                    Ok(mut conn) => {
+                        conn.write_all(
+                            br#"{"command":["get_property","playback-time"],"request_id":1}"#,
+                        )
                         .unwrap();
-                    std::thread::sleep(Duration::new(2, 0));
-                    dbg!(output);
-                };
-                pipe.wait().unwrap();
+                        conn.write_all(b"\n").unwrap();
+                        conn.flush().unwrap();
+
+                        let mut conn = BufReader::new(conn);
+                        let mut buffer = String::new();
+                        conn.read_line(&mut buffer).unwrap();
+
+                        dbg!(&buffer);
+                        let e = serde_json::from_str::<Value>(&buffer).unwrap();
+                        dbg!(*&e["data"].as_f64().unwrap() as u64);
+                    }
+                    Err(e) => eprintln!("{e}"),
+                }
                 false
             }
         };
@@ -278,7 +288,7 @@ impl<'setup> Sani<'setup> {
     }
 }
 
-fn main() {
+fn main() -> Result<()> {
     // Setup stage:
     // 1. Grab or set environment variables
     //    - Anime location

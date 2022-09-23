@@ -10,6 +10,7 @@ lto = true
 [dependencies]
 anyhow = "*"
 exitcode = "*"
+interprocess = "*"
 fork = "*"
 libc = "*"
 nix = "*"
