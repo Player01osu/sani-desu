@@ -98,35 +98,33 @@ impl<'setup> Sani<'setup> {
         }
     }
 
-    fn select_show(&mut self, mut anime_list: &str, args: &Args) {
-        // FIXME: Pipe directly from string rather than calling echo.
-        let mut pipe = Command::new("echo")
-            .arg(&mut anime_list)
+    fn select_show(&mut self, anime_list: &str, args: &Args) {
+        let mut dmenu = Command::new("dmenu")
+            .args(args.args.clone())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
 
-        if let Some(pipe) = pipe.stdout.take() {
-            let show_selection = Command::new("dmenu")
-                .stdin(pipe)
-                .args(args.args.clone())
-                .output()
-                .unwrap();
+        dmenu
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(anime_list.as_bytes())
+            .unwrap();
+        let output = dmenu.wait_with_output().unwrap();
 
-            // FIXME: Pipe directly from string rather than calling echo.
-            let sel = String::from_utf8(show_selection.stdout).unwrap();
-            let sel = sel.trim();
-            self.anime_sel = Some(sel.to_owned());
+        let binding = String::from_utf8(output.stdout).unwrap();
+        let show_sel = binding.trim();
+        self.anime_sel = Some(show_sel.to_owned());
 
-            dbg!(&sel);
+        dbg!(&show_sel);
 
-            if sel.is_empty() {
-                self.state = AppState::Quit(exitcode::OK);
-            } else {
-                self.state = AppState::EpSelect;
-            }
+        if show_sel.is_empty() {
+            self.state = AppState::Quit(exitcode::OK);
+        } else {
+            self.state = AppState::EpSelect;
         }
-        pipe.wait().unwrap();
     }
 
     fn select_ep(&mut self, args: &Args) {
@@ -146,47 +144,44 @@ impl<'setup> Sani<'setup> {
         for i in list {
             ep_list.push_str(&format!("{}\n", i.to_str().unwrap()));
         }
-        let mut ep_list = ep_list.trim();
-        dbg!(ep_list);
-        let mut pipe = Command::new("echo")
-            .arg(&mut ep_list)
+        let ep_list = ep_list.trim();
+
+        let mut dmenu = Command::new("dmenu")
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .args(args.args.clone())
             .spawn()
             .unwrap();
 
-        if let Some(pipe) = pipe.stdout.take() {
-            let ep_sel = Command::new("dmenu")
-                .stdin(pipe)
-                .args(args.args.clone())
-                .output()
-                .unwrap();
-            let ep_sel = String::from_utf8(ep_sel.stdout).unwrap();
-            if ep_sel.trim().is_empty() {
-                self.state = AppState::ShowSelect;
-            } else {
-                let ep_sel = format!(
-                    "{}/{}/{}",
-                    self.config.anime_dir.first().unwrap(),
-                    self.anime_sel.as_ref().unwrap(),
-                    ep_sel.trim()
-                );
+        dmenu
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(ep_list.as_bytes())
+            .unwrap();
 
-                match fork::fork() {
-                    Ok(fork::Fork::Parent(child)) => {
-                        self.child_pid = child;
-                        self.state = AppState::Watching(Rc::new(Some(ep_sel)))
-                    }
-                    Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
-                    Err(e) => eprintln!("{e}"),
-                };
-            }
-        }
+        let output = dmenu.wait_with_output().unwrap();
+        let binding = String::from_utf8(output.stdout).unwrap();
+        let ep_sel = binding.trim();
 
-        // FIXME: Lmao we do a little error ignoring.
-        // Still tho, why does this panic in child proc?
-        match pipe.wait() {
-            Ok(_) => (),
-            Err(_) => (),
+        if ep_sel.is_empty() {
+            self.state = AppState::ShowSelect;
+        } else {
+            let ep_sel = format!(
+                "{}/{}/{}",
+                self.config.anime_dir.first().unwrap(),
+                self.anime_sel.as_ref().unwrap(),
+                ep_sel
+            );
+
+            match fork::fork() {
+                Ok(fork::Fork::Parent(child)) => {
+                    self.child_pid = child;
+                    self.state = AppState::Watching(Rc::new(Some(ep_sel)))
+                }
+                Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
+                Err(e) => eprintln!("{e}"),
+            };
         }
     }
 
