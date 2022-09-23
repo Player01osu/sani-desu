@@ -29,14 +29,6 @@ fn default_anime_dir() -> Vec<String> {
     vec![format!("{home}/Videos")]
 }
 
-fn skip_empty(t: &Option<String>) -> bool {
-    if let Some(s) = t {
-        return s.is_empty()
-    } else {
-        return false
-    }
-}
-
 fn default_height() -> u32 {
     24
 }
