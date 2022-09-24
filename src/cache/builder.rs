@@ -6,9 +6,10 @@ pub struct CacheAnimeInfoBuilder<'cache> {
     anime_name: Option<&'cache str>,
     filename: Option<&'cache str>,
     current_ep: Option<u32>,
-    timestamp: Option<&'cache str>,
+    timestamp: Option<u64>,
 }
 
+#[derive(Debug)]
 pub enum CacheAnimeInfoBuilderError<'a> {
     MissingField(&'a str),
 }
@@ -29,7 +30,7 @@ impl<'cache> CacheAnimeInfoBuilder<'cache> {
         self
     }
 
-    pub fn timestamp(mut self, timestamp: &'cache str) -> Self {
+    pub fn timestamp(mut self, timestamp: u64) -> Self {
         self.timestamp = Some(timestamp);
         self
     }

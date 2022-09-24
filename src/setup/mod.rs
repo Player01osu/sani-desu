@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 pub mod config;
 pub mod environment;
 
-pub mod cache {
-}
-
 pub(self) fn get_env(env: &str) -> String {
     env::var(env)
         .map(|s| {

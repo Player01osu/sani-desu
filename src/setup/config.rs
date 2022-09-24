@@ -54,12 +54,9 @@ impl Config {
             Ok(mut v) => {
                 v.parse();
                 v
-            },
-            Err(_) => {
-                Config::default()
             }
+            Err(_) => Config::default(),
         };
         d
     }
 }
-

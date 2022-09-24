@@ -8,20 +8,24 @@ use nix::{sys, unistd::Pid};
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use setup::{Config, DmenuSettings, EnvVars};
+use std::thread;
 use std::{
+    borrow::Cow,
+    cell::RefCell,
     fs,
-    io::{BufRead, BufReader, Write, self},
+    io::{self, BufRead, BufReader, Write},
     path::Path,
     process::{self, Command, Stdio},
     rc::Rc,
-    time::Duration, cell::RefCell,
+    thread::Thread,
+    time::Duration,
 };
 
 struct Sani<'setup> {
     cache: Cache,
     config: &'setup Config,
     env: &'setup EnvVars,
-    anime_sel: Option<String>,
+    anime_sel: Option<Cow<'setup, String>>,
     ep_sel: Option<String>,
     state: AppState,
     mpv_socket: RefCell<io::Result<LocalSocketStream>>,
@@ -35,7 +39,7 @@ struct Args {
 
 impl From<&DmenuSettings> for Args {
     fn from(dmenu_settings: &DmenuSettings) -> Self {
-        let mut args: Vec<String> = Vec::new();
+        let mut args: Vec<String> = Vec::with_capacity(16);
 
         // FIXME: A lot of cloning and allocation here
         args.push("-p".to_string());
@@ -44,7 +48,7 @@ impl From<&DmenuSettings> for Args {
         args.push("-l".to_string());
         args.push(dmenu_settings.lines.to_string());
 
-        if dmenu_settings.bottom == true {
+        if dmenu_settings.bottom {
             args.push("-b".to_string());
         }
 
@@ -96,7 +100,10 @@ impl<'setup> Sani<'setup> {
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
-            mpv_socket: RefCell::new(Err(std::io::Error::new(io::ErrorKind::ConnectionRefused, "Poops"))),
+            mpv_socket: RefCell::new(Err(std::io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "Poops",
+            ))),
             timestamp: 0,
             child_pid: 0,
         }
@@ -120,7 +127,7 @@ impl<'setup> Sani<'setup> {
 
         let binding = String::from_utf8(output.stdout).unwrap();
         let show_sel = binding.trim();
-        self.anime_sel = Some(show_sel.to_owned());
+        self.anime_sel = Some(Cow::Owned(show_sel.to_owned()));
 
         dbg!(&show_sel);
 
@@ -134,22 +141,19 @@ impl<'setup> Sani<'setup> {
     fn select_ep(&mut self, args: &Args) {
         // FIXME: Make more efficient
         let mut ep_list = String::new();
-        let anime_sel = self.anime_sel.as_ref().unwrap();
-        let list = self
-            .config
-            .anime_dir
-            .iter()
-            .map(|v| {
-                fs::read_dir(&format!("{v}/{}", &anime_sel))
-                    .unwrap()
-                    .map(|d| d.unwrap().file_name())
-            })
-            .flatten();
+        let binding = self.anime_sel.as_ref().unwrap();
+        let anime_sel = binding;
+        let list = self.config.anime_dir.iter().flat_map(|v| {
+            fs::read_dir(&format!("{v}/{}", anime_sel))
+                .unwrap()
+                .map(|d| d.unwrap().file_name())
+        });
         for i in list {
             ep_list.push_str(&format!("{}\n", i.to_str().unwrap()));
         }
         let ep_list = ep_list.trim();
 
+        // FIXME: args calls into_iter bruh
         let mut dmenu = Command::new("dmenu")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -171,6 +175,7 @@ impl<'setup> Sani<'setup> {
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
         } else {
+            self.ep_sel = Some(ep_sel.to_owned());
             let ep_sel = format!(
                 "{}/{}/{}",
                 self.config.anime_dir.first().unwrap(),
@@ -183,9 +188,7 @@ impl<'setup> Sani<'setup> {
                     self.child_pid = child;
                     self.state = AppState::Watching(Rc::new(Some(ep_sel)))
                 }
-                Ok(fork::Fork::Child) => {
-                    self.state = AppState::Watching(Rc::new(None))
-                }
+                Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
                 Err(e) => eprintln!("{e}"),
             };
         }
@@ -194,9 +197,13 @@ impl<'setup> Sani<'setup> {
     fn watching(&mut self, handle: Rc<Option<String>>) {
         let f = match &*handle {
             Some(ep) => {
-                let mut args: Vec<&str> = Vec::new();
-                args.push(&ep);
-                args.push("--input-ipc-server=/tmp/mpvsocket");
+                let timestamp = self
+                    .cache
+                    .read_timestamp(&self.ep_sel.as_ref().unwrap())
+                    .unwrap_or_default();
+                let timestamp_arg = format!("--start={timestamp}");
+                dbg!(timestamp);
+                let args: Vec<&str> = vec![ep, "--input-ipc-server=/tmp/mpvsocket", &timestamp_arg];
 
                 Command::new("mpv")
                     .args(&args)
@@ -206,45 +213,61 @@ impl<'setup> Sani<'setup> {
                     .unwrap();
 
                 let pid = Pid::from_raw(self.child_pid);
-                match sys::signal::kill(pid, sys::signal::SIGKILL) {
-                    Ok(_) => match sys::wait::wait() {
-                        Ok(_) => (),
-                        Err(_) => (),
-                    },
-                    Err(_) => (),
+                if sys::signal::kill(pid, sys::signal::SIGTERM).is_ok() {
+                    thread::spawn(|| {
+                        if sys::wait::wait().is_ok() {
+                            ()
+                        }
+                    });
                 }
 
                 true
             }
             None => {
-                std::thread::sleep(Duration::new(2, 0));
+                use std::sync::atomic::{AtomicBool, Ordering};
+                use std::sync::Arc;
+                let term = Arc::new(AtomicBool::new(false));
+                signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))
+                    .unwrap();
+                while !term.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::new(1, 0));
 
-                let socket = self.mpv_socket.get_mut();
-                if socket.is_err() {
-                    self.mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket"));
-                }
-
-                let socket = self.mpv_socket.get_mut();
-                let socket = socket.as_mut();
-                match socket {
-                    Ok(conn) => {
-                        conn.write_all(
-                            br#"{"command":["get_property","playback-time"],"request_id":1}"#,
-                        )
-                        .unwrap();
-                        conn.write_all(b"\n").unwrap();
-                        conn.flush().unwrap();
-
-                        let mut conn = BufReader::new(conn);
-                        let mut buffer = String::new();
-                        conn.read_line(&mut buffer).unwrap();
-
-                        dbg!(&buffer);
-                        let e = serde_json::from_str::<Value>(&buffer).unwrap();
-                        dbg!(*&e["data"].as_f64().unwrap() as u64);
+                    let socket = self.mpv_socket.get_mut();
+                    if socket.is_err() {
+                        self.mpv_socket =
+                            RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket"));
                     }
-                    Err(e) => eprintln!("{e}"),
+
+                    let socket = self.mpv_socket.get_mut();
+                    let socket = socket.as_mut();
+                    match socket {
+                        Ok(conn) => {
+                            if let Ok(_) = conn.write_all(
+                                br#"{"command":["get_property","playback-time"],"request_id":1}"#,
+                            ) {
+                                conn.write_all(b"\n").unwrap();
+                                conn.flush().unwrap();
+
+                                let mut conn = BufReader::new(conn);
+                                let mut buffer = String::new();
+                                conn.read_line(&mut buffer).unwrap();
+
+                                let e = serde_json::from_str::<Value>(&buffer).unwrap();
+                                self.timestamp = match *&e["data"].as_f64() {
+                                    Some(v) => v.trunc() as u64,
+                                    None => {
+                                        dbg!(buffer);
+                                        return ();
+                                    }
+                                };
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("{e}")
+                        }
+                    }
                 }
+                self.state = AppState::WriteCache;
                 false
             }
         };
@@ -252,6 +275,19 @@ impl<'setup> Sani<'setup> {
         if f {
             self.state = AppState::EpSelect;
         }
+    }
+
+    fn write_cache(&mut self) {
+        let info = CacheAnimeInfo::builder()
+            .filename(&self.ep_sel.as_ref().unwrap())
+            .timestamp(self.timestamp)
+            .anime_name("D")
+            .current_ep(0)
+            .finalize()
+            .unwrap();
+        self.cache.write(info).unwrap();
+
+        self.state = AppState::Quit(exitcode::OK);
     }
 
     pub fn start(config: &Config, env: &EnvVars) -> Result<i32, i32> {
@@ -263,8 +299,7 @@ impl<'setup> Sani<'setup> {
             .config
             .anime_dir
             .iter()
-            .map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().file_name()))
-            .flatten();
+            .flat_map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().file_name()));
         for i in list {
             anime_list.push_str(&format!("{}\n", i.to_str().unwrap()));
         }
@@ -278,7 +313,8 @@ impl<'setup> Sani<'setup> {
             match app.state {
                 AppState::ShowSelect => app.select_show(anime_list, &args),
                 AppState::EpSelect => app.select_ep(&args),
-                AppState::Watching(ref mpv_id) => app.watching(Rc::clone(&mpv_id)),
+                AppState::Watching(ref mpv_id) => app.watching(Rc::clone(mpv_id)),
+                AppState::WriteCache => app.write_cache(),
                 AppState::Quit(exitcode) => match exitcode {
                     exitcode::OK => return Ok(exitcode::OK),
                     _ => return Err(exitcode::USAGE),
@@ -288,42 +324,9 @@ impl<'setup> Sani<'setup> {
         // Cache anime dir
         //
     }
-
-    fn cache(&self) {
-        let f = Path::new(&self.env.cache);
-        //self.config
-    }
 }
 
 fn main() -> Result<()> {
-    // Setup stage:
-    // 1. Grab or set environment variables
-    //    - Anime location
-    //    - Dmenu settings
-    // 2. Parse command line arguments
-    // 3. Ensure all require programs exist
-    //    - Mpv
-    //    - Dmenu
-    //    - Ls
-    // 4. Check for cache folder
-    //    - First $SANI_CACHE
-    //    - Then $XDG_CACHE_HOME/sani
-    //    - Create if not exist
-    // 5. Check for locally saved anime.json
-    //    - First $SANI_ANIME_JSON
-    //    - Then $XDG_DATA_HOME/sani/anime.json
-    //    - Create if not exist
-    // 6. Check for config folder
-    //    - First $SANI_CONFIG
-    //    - Then $XDG_CONFIG_HOME/sani/config
-    //    - Then $XDG_CONFIG_HOME/sani_config
-    //    - Lastly $HOME/.sani_config
-    //    - Create if not exist
-    // 7. Validate config
-    //    - Warn invalid config
-    //    - Log
-    //    - Guide to wiki
-    // 8. Start program
     let env = EnvVars::new();
     let config = Config::generate(&env);
 

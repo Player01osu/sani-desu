@@ -10,10 +10,10 @@ lto = true
 [dependencies]
 anyhow = "*"
 exitcode = "*"
-interprocess = "*"
 fork = "*"
-libc = "*"
+interprocess = "*"
 nix = "*"
+rusqlite = { version = "*", features = ["bundled"] }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 serde_yaml = "*"
