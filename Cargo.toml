@@ -13,8 +13,11 @@ exitcode = "*"
 fork = "*"
 interprocess = "*"
 nix = "*"
+regex = "*"
+lazy_static = "*"
 rusqlite = { version = "*", features = ["bundled"] }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 serde_yaml = "*"
 signal-hook = "*"
+walkdir = "*"

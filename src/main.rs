@@ -19,6 +19,73 @@ use std::{
     time::Duration,
 };
 
+#[derive(Debug, Default)]
+pub struct Episode {
+    filename: String,
+    episode: u32,
+    season: u32,
+}
+
+impl Episode {
+    pub fn parse_ep(filename: &str) -> Episode {
+        use lazy_static::lazy_static;
+        use regex::Regex;
+
+        lazy_static! {
+            static ref REG_EP: Regex = Regex::new(r#"(x256| \d\d |E\d\d|x\d\d|_\d\d_)"#).unwrap();
+            static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
+            static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265)"#).unwrap();
+        };
+        let ep_iter = REG_EP.find(filename);
+        let s_iter = REG_S.find(filename);
+
+        let mut episode = 0u32;
+
+        if let Some(i) = ep_iter {
+            if !REG_PARSE_OUT.is_match(i.as_str()) {
+                let episode_str = i
+                    .as_str()
+                    .chars()
+                    .filter(|c| c.is_digit(10))
+                    .collect::<String>();
+                episode = episode_str.parse::<u32>().unwrap();
+            }
+        }
+
+        let mut season = 0u32;
+        if let Some(i) = s_iter {
+            if !REG_PARSE_OUT.is_match(i.as_str()) {
+                let season_str = i
+                    .as_str()
+                    .chars()
+                    .filter(|c| c.is_digit(10))
+                    .collect::<String>();
+                season = season_str.parse::<u32>().unwrap();
+            }
+        }
+
+        if episode != 0 && season == 0 {
+            season = 1;
+        }
+
+        Episode {
+            filename: filename.to_owned(),
+            episode,
+            season,
+        }
+    }
+}
+
+pub fn filename(episode_vec: Vec<Episode>, episode_chosen: &str) -> Option<String> {
+    for episode in episode_vec {
+        let episode_fmt = format!("S{:02} E{:02}", episode.season, episode.episode);
+        if episode_fmt == episode_chosen {
+            return Some(episode.filename);
+        }
+    }
+    None
+}
+
 struct Sani<'setup> {
     cache: Cache,
     config: &'setup Config,
@@ -127,7 +194,11 @@ impl<'setup> Sani<'setup> {
         if show_sel.is_empty() {
             self.state = AppState::Quit(exitcode::OK);
         } else {
-            self.state = AppState::EpSelect;
+            if anime_list.contains(show_sel) {
+                self.state = AppState::EpSelect;
+            } else {
+                self.state = AppState::ShowSelect;
+            }
         }
     }
 
@@ -136,13 +207,22 @@ impl<'setup> Sani<'setup> {
         let mut ep_list = String::new();
         let binding = self.anime_sel.as_ref().unwrap();
         let anime_sel = binding;
+
         let list = self.config.anime_dir.iter().flat_map(|v| {
             fs::read_dir(&format!("{v}/{}", anime_sel))
                 .unwrap()
                 .map(|d| d.unwrap().file_name())
         });
+
+        let mut episode_vec: Vec<Episode> = Vec::new();
         for i in list {
-            ep_list.push_str(&format!("{}\n", i.to_str().unwrap()));
+            let episode = Episode::parse_ep(i.to_str().unwrap());
+            dbg!(&episode);
+            ep_list.push_str(&format!(
+                "S{:02} E{:02}\n",
+                &episode.season, &episode.episode
+            ));
+            episode_vec.push(episode);
         }
         let ep_list = ep_list.trim();
 
@@ -167,22 +247,26 @@ impl<'setup> Sani<'setup> {
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
         } else {
-            self.ep_sel = Some(ep_sel.to_owned());
-            let ep_sel = format!(
-                "{}/{}/{}",
-                self.config.anime_dir.first().unwrap(),
-                self.anime_sel.as_ref().unwrap(),
-                ep_sel
-            );
+            if let Some(ep_sel) = filename(episode_vec, ep_sel) {
+                self.ep_sel = Some(ep_sel.to_owned());
+                let ep_sel = format!(
+                    "{}/{}/{}",
+                    self.config.anime_dir.first().unwrap(),
+                    self.anime_sel.as_ref().unwrap(),
+                    ep_sel
+                );
 
-            match fork::fork() {
-                Ok(fork::Fork::Parent(child)) => {
-                    self.child_pid = child;
-                    self.state = AppState::Watching(Rc::new(Some(ep_sel)))
-                }
-                Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
-                Err(e) => eprintln!("{e}"),
-            };
+                match fork::fork() {
+                    Ok(fork::Fork::Parent(child)) => {
+                        self.child_pid = child;
+                        self.state = AppState::Watching(Rc::new(Some(ep_sel)))
+                    }
+                    Ok(fork::Fork::Child) => self.state = AppState::Watching(Rc::new(None)),
+                    Err(e) => eprintln!("{e}"),
+                };
+            } else {
+                self.state = AppState::EpSelect;
+            }
         }
     }
 
@@ -224,7 +308,8 @@ impl<'setup> Sani<'setup> {
                 signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))
                     .unwrap();
 
-                let mut mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
+                let mut mpv_socket =
+                    RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
 
                 while !term.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::new(1, 0));
@@ -259,9 +344,7 @@ impl<'setup> Sani<'setup> {
                                 };
                             }
                         }
-                        None => {
-                            ()
-                        }
+                        None => (),
                     }
                 }
 

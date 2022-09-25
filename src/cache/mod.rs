@@ -1,11 +1,9 @@
 use std::{any::Any, fs::File, rc::Rc};
 
-use self::builder::CacheAnimeInfoBuilder;
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-mod builder;
 pub struct Cache {
     pub path: Rc<String>,
     sqlite_conn: Connection,
