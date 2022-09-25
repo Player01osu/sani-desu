@@ -19,15 +19,10 @@ struct CacheInfo<'cache> {
 
 #[derive(Serialize, Deserialize)]
 pub struct CacheAnimeInfo<'cache> {
-    anime_name: &'cache str,
-    filename: &'cache str,
-    current_ep: u32,
-    timestamp: u64,
-}
-impl<'cache> CacheAnimeInfo<'cache> {
-    pub fn builder() -> CacheAnimeInfoBuilder<'cache> {
-        CacheAnimeInfoBuilder::default()
-    }
+    pub anime_name: &'cache str,
+    pub filename: &'cache str,
+    pub current_ep: u32,
+    pub timestamp: u64,
 }
 
 impl Cache {

@@ -279,13 +279,12 @@ impl<'setup> Sani<'setup> {
     }
 
     fn write_cache(&mut self) {
-        let info = CacheAnimeInfo::builder()
-            .filename(&self.ep_sel.as_ref().unwrap())
-            .timestamp(self.timestamp)
-            .anime_name("D")
-            .current_ep(0)
-            .finalize()
-            .unwrap();
+        let info = CacheAnimeInfo {
+            filename: &self.ep_sel.as_ref().unwrap(),
+            timestamp: self.timestamp,
+            anime_name: "tmp",
+            current_ep: 0,
+        };
         self.cache.write(info).unwrap();
 
         self.state = AppState::Quit(exitcode::OK);
