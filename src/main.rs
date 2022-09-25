@@ -7,6 +7,7 @@ use interprocess::local_socket::LocalSocketStream;
 use nix::{sys, unistd::Pid};
 use serde_json::Value;
 use setup::{Config, DmenuSettings, EnvVars};
+use std::process::Output;
 use std::thread;
 use std::{
     borrow::Cow,
@@ -18,6 +19,23 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+
+pub fn dmenu(args: &Vec<String>, pipe: &str) -> Output {
+    let mut dmenu = Command::new("dmenu")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .args(args)
+        .spawn()
+        .unwrap();
+
+    dmenu
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(pipe.as_bytes())
+        .unwrap();
+    dmenu.wait_with_output().unwrap()
+}
 
 #[derive(Debug, Default)]
 pub struct Episode {
@@ -55,7 +73,7 @@ impl PartialOrd for Episode {
     }
 }
 
-impl Eq for Episode { }
+impl Eq for Episode {}
 
 impl Ord for Episode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -220,21 +238,7 @@ impl<'setup> Sani<'setup> {
     }
 
     fn select_show(&mut self, anime_list: &str, args: Rc<Args>) {
-        let mut dmenu = Command::new("dmenu")
-            .args(&args.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        dmenu
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(anime_list.as_bytes())
-            .unwrap();
-        let output = dmenu.wait_with_output().unwrap();
-
+        let output = dmenu(&args.args, anime_list);
         let binding = String::from_utf8(output.stdout).unwrap();
         let show_sel = binding.trim();
         self.anime_sel = Some(Cow::Owned(show_sel.to_owned()));
@@ -280,21 +284,7 @@ impl<'setup> Sani<'setup> {
         }
         let ep_list = ep_list.trim();
 
-        let mut dmenu = Command::new("dmenu")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .args(&args.args)
-            .spawn()
-            .unwrap();
-
-        dmenu
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(ep_list.as_bytes())
-            .unwrap();
-
-        let output = dmenu.wait_with_output().unwrap();
+        let output = dmenu(&args.args, &ep_list);
         let binding = String::from_utf8(output.stdout).unwrap();
         let ep_sel = binding.trim();
 
@@ -305,7 +295,7 @@ impl<'setup> Sani<'setup> {
                 self.ep_sel = Some(ep_sel.to_owned());
                 let ep_sel = format!(
                     "{}/{}/{}",
-                    self.config.anime_dir.first().unwrap(),
+                    self.config.anime_dir.first().unwrap(), // TODO: Select from correct anime dir
                     self.anime_sel.as_ref().unwrap(),
                     ep_sel
                 );
