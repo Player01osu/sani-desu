@@ -26,7 +26,6 @@ struct Sani<'setup> {
     anime_sel: Option<Cow<'setup, String>>,
     ep_sel: Option<String>,
     state: AppState,
-    mpv_socket: RefCell<io::Result<LocalSocketStream>>,
     timestamp: u64,
     child_pid: i32,
 }
@@ -98,10 +97,6 @@ impl<'setup> Sani<'setup> {
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
-            mpv_socket: RefCell::new(Err(std::io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                "Poops",
-            ))),
             timestamp: 0,
             child_pid: 0,
         }
@@ -228,19 +223,22 @@ impl<'setup> Sani<'setup> {
                 let term = Arc::new(AtomicBool::new(false));
                 signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))
                     .unwrap();
+
+                let mut mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
+
                 while !term.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::new(1, 0));
 
-                    let socket = self.mpv_socket.get_mut();
-                    if socket.is_err() {
-                        self.mpv_socket =
-                            RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket"));
+                    let socket = mpv_socket.get_mut();
+                    if socket.is_none() {
+                        mpv_socket =
+                            RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
                     }
 
-                    let socket = self.mpv_socket.get_mut();
+                    let socket = mpv_socket.get_mut();
                     let socket = socket.as_mut();
                     match socket {
-                        Ok(conn) => {
+                        Some(conn) => {
                             if let Ok(_) = conn.write_all(
                                 br#"{"command":["get_property","playback-time"],"request_id":1}"#,
                             ) {
@@ -261,11 +259,15 @@ impl<'setup> Sani<'setup> {
                                 };
                             }
                         }
-                        Err(e) => {
-                            eprintln!("{e}")
+                        None => {
+                            ()
                         }
                     }
                 }
+
+                // SIGTERM signal will write to cache and quit.
+                // This signal is sent from parent process once
+                // mpv has quit.
                 self.state = AppState::WriteCache;
                 false
             }
