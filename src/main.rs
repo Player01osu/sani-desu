@@ -5,7 +5,6 @@ use anyhow::Result;
 use cache::{Cache, CacheAnimeInfo};
 use interprocess::local_socket::LocalSocketStream;
 use nix::{sys, unistd::Pid};
-use rusqlite::{params, Connection};
 use serde_json::Value;
 use setup::{Config, DmenuSettings, EnvVars};
 use std::thread;
@@ -17,7 +16,6 @@ use std::{
     path::Path,
     process::{self, Command, Stdio},
     rc::Rc,
-    thread::Thread,
     time::Duration,
 };
 
@@ -109,9 +107,9 @@ impl<'setup> Sani<'setup> {
         }
     }
 
-    fn select_show(&mut self, anime_list: &str, args: &Args) {
+    fn select_show(&mut self, anime_list: &str, args: Rc<Args>) {
         let mut dmenu = Command::new("dmenu")
-            .args(args.args.clone())
+            .args(&args.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -138,7 +136,7 @@ impl<'setup> Sani<'setup> {
         }
     }
 
-    fn select_ep(&mut self, args: &Args) {
+    fn select_ep(&mut self, args: Rc<Args>) {
         // FIXME: Make more efficient
         let mut ep_list = String::new();
         let binding = self.anime_sel.as_ref().unwrap();
@@ -153,11 +151,10 @@ impl<'setup> Sani<'setup> {
         }
         let ep_list = ep_list.trim();
 
-        // FIXME: args calls into_iter bruh
         let mut dmenu = Command::new("dmenu")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .args(args.args.clone())
+            .args(&args.args)
             .spawn()
             .unwrap();
 
@@ -196,6 +193,7 @@ impl<'setup> Sani<'setup> {
 
     fn watching(&mut self, handle: Rc<Option<String>>) {
         let f = match &*handle {
+            // Parent process run mpv
             Some(ep) => {
                 let timestamp = self
                     .cache
@@ -223,6 +221,7 @@ impl<'setup> Sani<'setup> {
 
                 true
             }
+            // Child process checks for mpv timestamp
             None => {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 use std::sync::Arc;
@@ -306,13 +305,12 @@ impl<'setup> Sani<'setup> {
         let anime_list = anime_list.trim();
 
         let dmenu_settings = &app.config.dmenu_settings;
-        // FIXME: Dont clone the args
-        let args = Args::from(dmenu_settings);
+        let args = Rc::new(Args::from(dmenu_settings));
 
         loop {
             match app.state {
-                AppState::ShowSelect => app.select_show(anime_list, &args),
-                AppState::EpSelect => app.select_ep(&args),
+                AppState::ShowSelect => app.select_show(anime_list, Rc::clone(&args)),
+                AppState::EpSelect => app.select_ep(Rc::clone(&args)),
                 AppState::Watching(ref mpv_id) => app.watching(Rc::clone(mpv_id)),
                 AppState::WriteCache => app.write_cache(),
                 AppState::Quit(exitcode) => match exitcode {
@@ -321,8 +319,6 @@ impl<'setup> Sani<'setup> {
                 },
             }
         }
-        // Cache anime dir
-        //
     }
 }
 
