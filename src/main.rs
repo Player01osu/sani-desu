@@ -26,6 +26,56 @@ pub struct Episode {
     season: u32,
 }
 
+impl PartialEq for Episode {
+    fn eq(&self, other: &Self) -> bool {
+        if self.episode == other.episode && self.season == other.season {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl PartialOrd for Episode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        if self.season > other.season {
+            Some(Ordering::Greater)
+        } else if self.season < other.season {
+            Some(Ordering::Less)
+        } else {
+            if self.episode > other.episode {
+                Some(Ordering::Greater)
+            } else if self.episode < other.episode {
+                Some(Ordering::Less)
+            } else {
+                Some(Ordering::Equal)
+            }
+        }
+    }
+}
+
+impl Eq for Episode { }
+
+impl Ord for Episode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        if self.season > other.season {
+            Ordering::Greater
+        } else if self.season < other.season {
+            Ordering::Less
+        } else {
+            if self.episode > other.episode {
+                Ordering::Greater
+            } else if self.episode < other.episode {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        }
+    }
+}
+
 impl Episode {
     pub fn parse_ep(filename: &str) -> Episode {
         use lazy_static::lazy_static;
@@ -217,12 +267,16 @@ impl<'setup> Sani<'setup> {
         let mut episode_vec: Vec<Episode> = Vec::new();
         for i in list {
             let episode = Episode::parse_ep(i.to_str().unwrap());
+            episode_vec.push(episode);
+        }
+        episode_vec.sort();
+
+        for episode in episode_vec.iter() {
             dbg!(&episode);
             ep_list.push_str(&format!(
                 "S{:02} E{:02}\n",
                 &episode.season, &episode.episode
             ));
-            episode_vec.push(episode);
         }
         let ep_list = ep_list.trim();
 
