@@ -19,6 +19,12 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+use lazy_static::lazy_static;
+lazy_static!{
+    static ref ENV: EnvVars = EnvVars::new();
+    static ref CONFIG: Config = Config::generate(&ENV);
+
+}
 
 pub fn dmenu(args: &Vec<String>, pipe: &str) -> Output {
     let mut dmenu = Command::new("dmenu")
@@ -96,11 +102,10 @@ impl Ord for Episode {
 
 impl Episode {
     pub fn parse_ep(filename: &str) -> Episode {
-        use lazy_static::lazy_static;
         use regex::Regex;
 
         lazy_static! {
-            static ref REG_EP: Regex = Regex::new(r#"(x256| \d\d |E\d\d|x\d\d|_\d\d_)"#).unwrap();
+            static ref REG_EP: Regex = Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d|_\d\d_)"#).unwrap();
             static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
             static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265)"#).unwrap();
         };
@@ -108,6 +113,7 @@ impl Episode {
         let s_iter = REG_S.find(filename);
 
         let mut episode = 0u32;
+
 
         if let Some(i) = ep_iter {
             if !REG_PARSE_OUT.is_match(i.as_str()) {
@@ -156,8 +162,6 @@ pub fn filename(episode_vec: Vec<Episode>, episode_chosen: &str) -> Option<Strin
 
 struct Sani<'setup> {
     cache: Cache,
-    config: &'setup Config,
-    env: &'setup EnvVars,
     anime_sel: Option<Cow<'setup, String>>,
     ep_sel: Option<String>,
     state: AppState,
@@ -224,11 +228,9 @@ pub enum AppState {
 }
 
 impl<'setup> Sani<'setup> {
-    fn new(config: &'setup Config, env: &'setup EnvVars) -> Self {
+    fn new() -> Self {
         Self {
-            config,
-            env,
-            cache: Cache::new(env.cache.as_str()),
+            cache: Cache::new(ENV.cache.as_str()),
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
@@ -262,7 +264,7 @@ impl<'setup> Sani<'setup> {
         let binding = self.anime_sel.as_ref().unwrap();
         let anime_sel = binding;
 
-        let list = self.config.anime_dir.iter().flat_map(|v| {
+        let list = CONFIG.anime_dir.iter().flat_map(|v| {
             fs::read_dir(&format!("{v}/{}", anime_sel))
                 .unwrap()
                 .map(|d| d.unwrap().file_name())
@@ -295,7 +297,7 @@ impl<'setup> Sani<'setup> {
                 self.ep_sel = Some(ep_sel.to_owned());
                 let ep_sel = format!(
                     "{}/{}/{}",
-                    self.config.anime_dir.first().unwrap(), // TODO: Select from correct anime dir
+                    CONFIG.anime_dir.first().unwrap(), // TODO: Select from correct anime dir
                     self.anime_sel.as_ref().unwrap(),
                     ep_sel
                 );
@@ -417,13 +419,12 @@ impl<'setup> Sani<'setup> {
         self.state = AppState::Quit(exitcode::OK);
     }
 
-    pub fn start(config: &Config, env: &EnvVars) -> Result<i32, i32> {
-        let mut app = Sani::new(config, env);
+    pub fn start() -> Result<i32, i32> {
+        let mut app = Sani::new();
 
         // FIXME: Make more efficient
         let mut anime_list = String::new();
-        let list = app
-            .config
+        let list = CONFIG
             .anime_dir
             .iter()
             .flat_map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().file_name()));
@@ -432,7 +433,7 @@ impl<'setup> Sani<'setup> {
         }
         let anime_list = anime_list.trim();
 
-        let dmenu_settings = &app.config.dmenu_settings;
+        let dmenu_settings = &CONFIG.dmenu_settings;
         let args = Rc::new(Args::from(dmenu_settings));
 
         loop {
@@ -451,10 +452,7 @@ impl<'setup> Sani<'setup> {
 }
 
 fn main() -> Result<()> {
-    let env = EnvVars::new();
-    let config = Config::generate(&env);
-
-    match Sani::start(&config, &env) {
+    match Sani::start() {
         Ok(v) => process::exit(v),
         Err(e) => process::exit(e),
     };
