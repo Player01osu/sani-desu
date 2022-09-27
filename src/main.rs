@@ -4,9 +4,12 @@ mod setup;
 use anyhow::Result;
 use cache::{Cache, CacheAnimeInfo};
 use interprocess::local_socket::LocalSocketStream;
+use lazy_static::lazy_static;
 use nix::{sys, unistd::Pid};
+use regex::Regex;
 use serde_json::Value;
 use setup::{Config, DmenuSettings, EnvVars};
+use std::ops::Add;
 use std::process::Output;
 use std::thread;
 use std::{
@@ -19,11 +22,14 @@ use std::{
     rc::Rc,
     time::Duration,
 };
-use lazy_static::lazy_static;
-lazy_static!{
+
+use crate::cache::EpisodeLayout;
+lazy_static! {
     static ref ENV: EnvVars = EnvVars::new();
     static ref CONFIG: Config = Config::generate(&ENV);
-
+    static ref REG_EP: Regex = Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d|_\d\d_)"#).unwrap();
+    static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
+    static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265)"#).unwrap();
 }
 
 pub fn dmenu(args: &Vec<String>, pipe: &str) -> Output {
@@ -102,18 +108,10 @@ impl Ord for Episode {
 
 impl Episode {
     pub fn parse_ep(filename: &str) -> Episode {
-        use regex::Regex;
-
-        lazy_static! {
-            static ref REG_EP: Regex = Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d|_\d\d_)"#).unwrap();
-            static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
-            static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265)"#).unwrap();
-        };
         let ep_iter = REG_EP.find(filename);
         let s_iter = REG_S.find(filename);
 
         let mut episode = 0u32;
-
 
         if let Some(i) = ep_iter {
             if !REG_PARSE_OUT.is_match(i.as_str()) {
@@ -150,21 +148,13 @@ impl Episode {
     }
 }
 
-pub fn filename(episode_vec: Vec<Episode>, episode_chosen: &str) -> Option<String> {
-    for episode in episode_vec {
-        let episode_fmt = format!("S{:02} E{:02}", episode.season, episode.episode);
-        if episode_fmt == episode_chosen {
-            return Some(episode.filename);
-        }
-    }
-    None
-}
-
 struct Sani<'setup> {
-    cache: Cache,
+    cache: Cache<'setup>,
     anime_sel: Option<Cow<'setup, String>>,
     ep_sel: Option<String>,
     state: AppState,
+    episode: u32,
+    season: u32,
     timestamp: u64,
     child_pid: i32,
 }
@@ -221,21 +211,91 @@ impl From<&DmenuSettings> for Args {
 
 pub enum AppState {
     ShowSelect,
-    EpSelect,
+    EpSelect(bool),
     Watching(Rc<Option<String>>),
     WriteCache,
     Quit(exitcode::ExitCode),
 }
 
 impl<'setup> Sani<'setup> {
+    pub fn filename(&self, episode_vec: Vec<Episode>, episode_chosen: &str) -> Option<String> {
+        match episode_chosen {
+            "Current Episode:" => return Some(self.cache.current_ep_s.filename.clone()),
+            "Next Episode:" => {
+                let episode_chosen = format!(
+                    "S{:02} E{:02}",
+                    self.cache.next_ep_s.season, self.cache.next_ep_s.episode
+                );
+                for episode in episode_vec {
+                    let episode_fmt = format!("S{:02} E{:02}", episode.season, episode.episode);
+                    if episode_fmt == episode_chosen {
+                        return Some(episode.filename);
+                    }
+                }
+                return Some(self.cache.next_ep_s.filename.clone());
+            }
+            _ => (),
+        };
+
+        for episode in episode_vec {
+            let episode_fmt = format!("S{:02} E{:02}", episode.season, episode.episode);
+            if episode_fmt == episode_chosen {
+                return Some(episode.filename);
+            }
+        }
+        None
+    }
+
     fn new() -> Self {
         Self {
             cache: Cache::new(ENV.cache.as_str()),
             anime_sel: None,
             ep_sel: None,
             state: AppState::ShowSelect,
+            episode: 0,
+            season: 0,
             timestamp: 0,
             child_pid: 0,
+        }
+    }
+
+    fn parse_str(&mut self, str: &str) -> (u32, u32) {
+        match str {
+            "Current Episode:" => {
+                let season = self.cache.current_ep_s.season;
+                let episode = self.cache.current_ep_s.episode;
+                return (season, episode);
+            }
+            "Next Episode:" => {
+                let season = self.cache.next_ep_s.season;
+                let episode = self.cache.next_ep_s.episode;
+                return (season, episode);
+            }
+            str => {
+                let ep = REG_EP.find(str);
+                let s = REG_S.find(str);
+
+                dbg!(ep);
+                dbg!(s);
+
+                let episode = ep
+                    .unwrap()
+                    .as_str()
+                    .chars()
+                    .filter(|c| c.is_digit(10))
+                    .collect::<String>()
+                    .parse()
+                    .unwrap();
+                let season = s
+                    .unwrap()
+                    .as_str()
+                    .chars()
+                    .filter(|c| c.is_digit(10))
+                    .collect::<String>()
+                    .parse()
+                    .unwrap();
+                (season, episode)
+            }
         }
     }
 
@@ -251,14 +311,14 @@ impl<'setup> Sani<'setup> {
             self.state = AppState::Quit(exitcode::OK);
         } else {
             if anime_list.contains(show_sel) {
-                self.state = AppState::EpSelect;
+                self.state = AppState::EpSelect(false);
             } else {
                 self.state = AppState::ShowSelect;
             }
         }
     }
 
-    fn select_ep(&mut self, args: Rc<Args>) {
+    fn select_ep(&mut self, args: Rc<Args>, watched: bool) {
         // FIXME: Make more efficient
         let mut ep_list = String::new();
         let binding = self.anime_sel.as_ref().unwrap();
@@ -275,15 +335,8 @@ impl<'setup> Sani<'setup> {
             let episode = Episode::parse_ep(i.to_str().unwrap());
             episode_vec.push(episode);
         }
-        episode_vec.sort();
+        self.fill_string(&mut ep_list, &mut episode_vec, watched);
 
-        for episode in episode_vec.iter() {
-            dbg!(&episode);
-            ep_list.push_str(&format!(
-                "S{:02} E{:02}\n",
-                &episode.season, &episode.episode
-            ));
-        }
         let ep_list = ep_list.trim();
 
         let output = dmenu(&args.args, &ep_list);
@@ -293,13 +346,16 @@ impl<'setup> Sani<'setup> {
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
         } else {
-            if let Some(ep_sel) = filename(episode_vec, ep_sel) {
-                self.ep_sel = Some(ep_sel.to_owned());
+            if let Some(filename) = self.filename(episode_vec, ep_sel) {
+                let (season, episode) = self.parse_str(&ep_sel);
+                self.season = season;
+                self.episode = episode;
+                self.ep_sel = Some(filename.to_owned());
                 let ep_sel = format!(
                     "{}/{}/{}",
                     CONFIG.anime_dir.first().unwrap(), // TODO: Select from correct anime dir
                     self.anime_sel.as_ref().unwrap(),
-                    ep_sel
+                    filename
                 );
 
                 match fork::fork() {
@@ -311,13 +367,13 @@ impl<'setup> Sani<'setup> {
                     Err(e) => eprintln!("{e}"),
                 };
             } else {
-                self.state = AppState::EpSelect;
+                self.state = AppState::EpSelect(true);
             }
         }
     }
 
-    fn watching(&mut self, handle: Rc<Option<String>>) {
-        let f = match &*handle {
+    fn watching(&mut self, episode: Rc<Option<String>>) {
+        let f = match &*episode {
             // Parent process run mpv
             Some(ep) => {
                 let timestamp = self
@@ -327,6 +383,20 @@ impl<'setup> Sani<'setup> {
                 let timestamp_arg = format!("--start={timestamp}");
                 dbg!(timestamp);
                 let args: Vec<&str> = vec![ep, "--input-ipc-server=/tmp/mpvsocket", &timestamp_arg];
+
+                let current_ep = EpisodeLayout {
+                    episode: self.episode,
+                    season: self.season,
+                    filename: self.ep_sel.as_ref().unwrap().to_string(),
+                };
+
+                let next_ep = EpisodeLayout {
+                    episode: self.episode + 1,
+                    season: self.season,
+                    filename: self.ep_sel.as_ref().unwrap().to_string(),
+                };
+
+                self.cache.write_finished(current_ep, next_ep);
 
                 Command::new("mpv")
                     .args(&args)
@@ -403,16 +473,18 @@ impl<'setup> Sani<'setup> {
         };
 
         if f {
-            self.state = AppState::EpSelect;
+            self.state = AppState::EpSelect(true);
         }
     }
 
     fn write_cache(&mut self) {
         let info = CacheAnimeInfo {
-            filename: &self.ep_sel.as_ref().unwrap(),
+            filename: self.ep_sel.as_ref().unwrap(),
             timestamp: self.timestamp,
-            anime_name: "tmp",
-            current_ep: 0,
+            directory: self.anime_sel.as_ref().unwrap(),
+            fullpath: self.ep_sel.as_ref().unwrap(),
+            episode: self.episode,
+            season: self.season,
         };
         self.cache.write(info).unwrap();
 
@@ -439,14 +511,52 @@ impl<'setup> Sani<'setup> {
         loop {
             match app.state {
                 AppState::ShowSelect => app.select_show(anime_list, Rc::clone(&args)),
-                AppState::EpSelect => app.select_ep(Rc::clone(&args)),
-                AppState::Watching(ref mpv_id) => app.watching(Rc::clone(mpv_id)),
+                AppState::EpSelect(watched) => app.select_ep(Rc::clone(&args), watched),
+                AppState::Watching(ref episode_file) => app.watching(Rc::clone(episode_file)),
                 AppState::WriteCache => app.write_cache(),
                 AppState::Quit(exitcode) => match exitcode {
                     exitcode::OK => return Ok(exitcode::OK),
                     _ => return Err(exitcode::USAGE),
                 },
             }
+        }
+    }
+
+    fn fill_string(
+        &mut self,
+        ep_list: &mut String,
+        episode_vec: &mut Vec<Episode>,
+        watched: bool,
+    ) -> () {
+        episode_vec.sort();
+        if !watched {
+            let relative_ep = self
+                .cache
+                .read_relative_ep(&self.anime_sel.as_ref().unwrap())
+                .unwrap();
+            dbg!(&relative_ep);
+            self.cache.current_ep_s = relative_ep.current_ep;
+            self.cache.next_ep_s = relative_ep.next_ep;
+        }
+        ep_list.push_str("Current Episode:\n");
+        let binding = format!(
+            "S{:02} E{:02}\n",
+            self.cache.current_ep_s.season, self.cache.current_ep_s.episode
+        );
+        ep_list.push_str(&binding);
+        ep_list.push_str("Next Episode:\n");
+        let binding = format!(
+            "S{:02} E{:02}\n",
+            self.cache.next_ep_s.season, self.cache.next_ep_s.episode
+        );
+        ep_list.push_str(&binding);
+
+        for episode in episode_vec.iter() {
+            //dbg!(&episode);
+            ep_list.push_str(&format!(
+                "S{:02} E{:02}\n",
+                &episode.season, &episode.episode
+            ));
         }
     }
 }
