@@ -1,4 +1,4 @@
-use std::{fs, ops::Sub, path::Path, thread};
+use std::{fs, ops::Sub, thread};
 
 use anyhow::Result;
 use rusqlite::{params, Connection};
@@ -9,11 +9,7 @@ use crate::{episode::Episode, CONFIG, ENV};
 
 impl PartialEq for EpisodeSeason {
     fn eq(&self, other: &Self) -> bool {
-        if self.episode == other.episode && self.season == other.season {
-            true
-        } else {
-            false
-        }
+        self.episode == other.episode && self.season == other.season
     }
 }
 
@@ -24,14 +20,12 @@ impl PartialOrd for EpisodeSeason {
             Some(Ordering::Greater)
         } else if self.season < other.season {
             Some(Ordering::Less)
+        } else if self.episode > other.episode {
+            Some(Ordering::Greater)
+        } else if self.episode < other.episode {
+            Some(Ordering::Less)
         } else {
-            if self.episode > other.episode {
-                Some(Ordering::Greater)
-            } else if self.episode < other.episode {
-                Some(Ordering::Less)
-            } else {
-                Some(Ordering::Equal)
-            }
+            Some(Ordering::Equal)
         }
     }
 }
@@ -45,14 +39,12 @@ impl Ord for EpisodeSeason {
             Ordering::Greater
         } else if self.season < other.season {
             Ordering::Less
+        } else if self.episode > other.episode {
+            Ordering::Greater
+        } else if self.episode < other.episode {
+            Ordering::Less
         } else {
-            if self.episode > other.episode {
-                Ordering::Greater
-            } else if self.episode < other.episode {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
+            Ordering::Equal
         }
     }
 }
@@ -225,14 +217,14 @@ impl<'cache> Cache<'cache> {
             )
             .unwrap();
 
-        let bruh = stmt
+        
+
+        stmt
             .query_row(params![episode.episode, episode.season, directory], |row| {
                 let directory: String = row.get_unwrap(0);
                 Ok(directory)
             })
-            .ok();
-
-        bruh
+            .ok()
     }
 
     pub fn write_finished(&mut self, current_ep: EpisodeLayout, next_ep: EpisodeLayout) {
@@ -397,10 +389,10 @@ impl<'cache> Cache<'cache> {
 
         let timestamp: Result<u64, rusqlite::Error> = stmt.query_row([filename], |row| row.get(0));
         match timestamp {
-            Ok(v) => return Ok(v),
+            Ok(v) => Ok(v),
             Err(e) => {
                 dbg!(e);
-                return Ok(0);
+                Ok(0)
             }
         }
     }

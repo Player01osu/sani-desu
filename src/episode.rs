@@ -10,11 +10,7 @@ pub struct Episode {
 
 impl PartialEq for Episode {
     fn eq(&self, other: &Self) -> bool {
-        if self.episode == other.episode && self.season == other.season {
-            true
-        } else {
-            false
-        }
+        self.episode == other.episode && self.season == other.season
     }
 }
 
@@ -25,14 +21,12 @@ impl PartialOrd for Episode {
             Some(Ordering::Greater)
         } else if self.season < other.season {
             Some(Ordering::Less)
+        } else if self.episode > other.episode {
+            Some(Ordering::Greater)
+        } else if self.episode < other.episode {
+            Some(Ordering::Less)
         } else {
-            if self.episode > other.episode {
-                Some(Ordering::Greater)
-            } else if self.episode < other.episode {
-                Some(Ordering::Less)
-            } else {
-                Some(Ordering::Equal)
-            }
+            Some(Ordering::Equal)
         }
     }
 }
@@ -46,14 +40,12 @@ impl Ord for Episode {
             Ordering::Greater
         } else if self.season < other.season {
             Ordering::Less
+        } else if self.episode > other.episode {
+            Ordering::Greater
+        } else if self.episode < other.episode {
+            Ordering::Less
         } else {
-            if self.episode > other.episode {
-                Ordering::Greater
-            } else if self.episode < other.episode {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
+            Ordering::Equal
         }
     }
 }
@@ -70,7 +62,7 @@ impl Episode {
                 let episode_str = i
                     .as_str()
                     .chars()
-                    .filter(|c| c.is_digit(10))
+                    .filter(|c| c.is_ascii_digit())
                     .collect::<String>();
                 episode = episode_str.parse::<u32>().unwrap();
             }
@@ -82,7 +74,7 @@ impl Episode {
                 let season_str = i
                     .as_str()
                     .chars()
-                    .filter(|c| c.is_digit(10))
+                    .filter(|c| c.is_ascii_digit())
                     .collect::<String>();
                 season = season_str.parse::<u32>().unwrap();
             }

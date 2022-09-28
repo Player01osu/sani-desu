@@ -1,13 +1,13 @@
 use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::{Read},
     path::Path,
 };
 
-use serde::{Deserialize, Serialize};
 
-use super::{get_env, Config, EnvVars};
-use lazy_static::lazy_static;
+
+use super::{Config, EnvVars};
+
 
 impl Config {
     fn parse(&mut self) {
@@ -51,13 +51,13 @@ impl Config {
         let mut buf = Vec::new();
         conf_file.read_to_end(&mut buf).unwrap();
 
-        let d = match serde_yaml::from_slice::<Config>(&mut buf) {
+
+        match serde_yaml::from_slice::<Config>(&buf) {
             Ok(mut v) => {
                 v.parse();
                 v
             }
             Err(_) => Config::default(),
-        };
-        d
+        }
     }
 }

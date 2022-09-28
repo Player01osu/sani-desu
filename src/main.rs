@@ -1,7 +1,7 @@
-mod cache;
-mod setup;
 mod args;
+mod cache;
 mod episode;
+mod setup;
 
 use anyhow::Result;
 use args::Args;
@@ -28,7 +28,8 @@ use crate::cache::EpisodeLayout;
 lazy_static! {
     static ref ENV: EnvVars = EnvVars::new();
     static ref CONFIG: Config = Config::generate(&ENV);
-    static ref REG_EP: Regex = Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d| \d\d.|_\d\d_)"#).unwrap();
+    static ref REG_EP: Regex =
+        Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d| \d\d.|_\d\d_)"#).unwrap();
     static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
     static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265)"#).unwrap();
 }
@@ -123,12 +124,10 @@ impl<'setup> Sani<'setup> {
 
         if show_sel.is_empty() {
             self.state = AppState::Quit(exitcode::OK);
+        } else if anime_list.contains(show_sel) {
+            self.state = AppState::EpSelect(false);
         } else {
-            if anime_list.contains(show_sel) {
-                self.state = AppState::EpSelect(false);
-            } else {
-                self.state = AppState::ShowSelect;
-            }
+            self.state = AppState::ShowSelect;
         }
     }
 
@@ -141,39 +140,37 @@ impl<'setup> Sani<'setup> {
 
         self.fill_string(&mut ep_list, &mut episode_vec, watched);
         let ep_list = ep_list.trim();
-        let output = dmenu(&args.args, &ep_list);
+        let output = dmenu(&args.args, ep_list);
 
         let binding = String::from_utf8(output.stdout).unwrap();
         let ep_sel = binding.trim();
 
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
-        } else {
-            if let Some(file_path) = self.file_path(ep_sel) {
-                let episode_season = self.parse_str(&ep_sel);
-                self.season = episode_season.season;
-                self.episode = episode_season.episode;
-                dbg!(&file_path);
-                self.ep_sel = Some(file_path.to_owned());
+        } else if let Some(file_path) = self.file_path(ep_sel) {
+            let episode_season = self.parse_str(ep_sel);
+            self.season = episode_season.season;
+            self.episode = episode_season.episode;
+            dbg!(&file_path);
+            self.ep_sel = Some(file_path.to_owned());
 
-                match fork::fork() {
-                    Ok(fork::Fork::Parent(child)) => {
-                        self.child_pid = child;
-                        self.state = AppState::Watching(Rc::new(file_path))
-                    }
-                    Ok(fork::Fork::Child) => self.state = AppState::Ipc,
-                    Err(e) => eprintln!("{e}"),
-                };
-            } else {
-                self.state = AppState::EpSelect(true);
-            }
+            match fork::fork() {
+                Ok(fork::Fork::Parent(child)) => {
+                    self.child_pid = child;
+                    self.state = AppState::Watching(Rc::new(file_path))
+                }
+                Ok(fork::Fork::Child) => self.state = AppState::Ipc,
+                Err(e) => eprintln!("{e}"),
+            };
+        } else {
+            self.state = AppState::EpSelect(true);
         }
     }
 
     fn watching(&mut self, episode: Rc<String>) {
         let timestamp = self
             .cache
-            .read_timestamp(&self.ep_sel.as_ref().unwrap())
+            .read_timestamp(self.ep_sel.as_ref().unwrap())
             .unwrap_or_default();
         let timestamp_arg = format!("--start={timestamp}");
         let args: Vec<&str> = vec![
@@ -205,11 +202,7 @@ impl<'setup> Sani<'setup> {
 
         let pid = Pid::from_raw(self.child_pid);
         if sys::signal::kill(pid, sys::signal::SIGTERM).is_ok() {
-            thread::spawn(|| {
-                if sys::wait::wait().is_ok() {
-                    ()
-                }
-            });
+            thread::spawn(|| if sys::wait::wait().is_ok() {});
         }
         self.state = AppState::EpSelect(true);
     }
@@ -228,34 +221,32 @@ impl<'setup> Sani<'setup> {
             let socket = mpv_socket.get_mut();
             if socket.is_none() {
                 mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
-                continue
+                continue;
             }
 
             let socket = mpv_socket.get_mut();
             let socket = socket.as_mut();
-            match socket {
-                Some(conn) => {
-                    if let Ok(_) = conn.write_all(
-                        br#"{"command":["get_property","playback-time"],"request_id":1}"#,
-                    ) {
-                        conn.write_all(b"\n").unwrap();
-                        conn.flush().unwrap();
+            if let Some(conn) = socket {
+                if conn
+                    .write_all(br#"{"command":["get_property","playback-time"],"request_id":1}"#)
+                    .is_ok()
+                {
+                    conn.write_all(b"\n").unwrap();
+                    conn.flush().unwrap();
 
-                        let mut conn = BufReader::new(conn);
-                        let mut buffer = String::new();
-                        conn.read_line(&mut buffer).unwrap();
+                    let mut conn = BufReader::new(conn);
+                    let mut buffer = String::new();
+                    conn.read_line(&mut buffer).unwrap();
 
-                        let e = serde_json::from_str::<Value>(&buffer).unwrap();
-                        self.timestamp = match *&e["data"].as_f64() {
-                            Some(v) => v.trunc() as u64,
-                            None => {
-                                dbg!(buffer);
-                                return ();
-                            }
-                        };
-                    }
+                    let e = serde_json::from_str::<Value>(&buffer).unwrap();
+                    self.timestamp = match e["data"].as_f64() {
+                        Some(v) => v.trunc() as u64,
+                        None => {
+                            dbg!(buffer);
+                            return;
+                        }
+                    };
                 }
-                None => (),
             }
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -300,12 +291,12 @@ impl<'cache> Sani<'cache> {
             "Current Episode:" => {
                 let season = self.cache.current_ep_s.season;
                 let episode = self.cache.current_ep_s.episode;
-                return EpisodeSeason { episode, season };
+                EpisodeSeason { episode, season }
             }
             "Next Episode:" => {
                 let season = self.cache.next_ep_s.season;
                 let episode = self.cache.next_ep_s.episode;
-                return EpisodeSeason { episode, season };
+                EpisodeSeason { episode, season }
             }
             str => {
                 let ep = REG_EP.find(str);
@@ -318,7 +309,7 @@ impl<'cache> Sani<'cache> {
                     .unwrap()
                     .as_str()
                     .chars()
-                    .filter(|c| c.is_digit(10))
+                    .filter(|c| c.is_ascii_digit())
                     .collect::<String>()
                     .parse()
                     .unwrap();
@@ -326,7 +317,7 @@ impl<'cache> Sani<'cache> {
                     .unwrap()
                     .as_str()
                     .chars()
-                    .filter(|c| c.is_digit(10))
+                    .filter(|c| c.is_ascii_digit())
                     .collect::<String>()
                     .parse()
                     .unwrap();
@@ -339,12 +330,12 @@ impl<'cache> Sani<'cache> {
         ep_list: &mut String,
         episode_vec: &mut [EpisodeSeason],
         watched: bool,
-    ) -> () {
+    ) {
         episode_vec.sort();
         if !watched {
             let relative_ep = self
                 .cache
-                .read_relative_ep(&self.anime_sel.as_ref().unwrap())
+                .read_relative_ep(self.anime_sel.as_ref().unwrap())
                 .unwrap();
             dbg!(&relative_ep);
             self.cache.current_ep_s = relative_ep.current_ep;
