@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{get_env, Config, EnvVars};
 use lazy_static::lazy_static;
-lazy_static!{
-}
 
 impl Config {
     fn parse(&mut self) {

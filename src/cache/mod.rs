@@ -1,17 +1,66 @@
-use std::{
-    any::Any,
-    fs::{self, File},
-    path::Path,
-    rc::Rc,
-    thread,
-};
+use std::{fs, ops::Sub, path::Path, thread};
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::{AppState, Episode, Sani, CONFIG, ENV};
+use crate::{episode::Episode, CONFIG, ENV};
+
+impl PartialEq for EpisodeSeason {
+    fn eq(&self, other: &Self) -> bool {
+        if self.episode == other.episode && self.season == other.season {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl PartialOrd for EpisodeSeason {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        if self.season > other.season {
+            Some(Ordering::Greater)
+        } else if self.season < other.season {
+            Some(Ordering::Less)
+        } else {
+            if self.episode > other.episode {
+                Some(Ordering::Greater)
+            } else if self.episode < other.episode {
+                Some(Ordering::Less)
+            } else {
+                Some(Ordering::Equal)
+            }
+        }
+    }
+}
+
+impl Eq for EpisodeSeason {}
+
+impl Ord for EpisodeSeason {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        if self.season > other.season {
+            Ordering::Greater
+        } else if self.season < other.season {
+            Ordering::Less
+        } else {
+            if self.episode > other.episode {
+                Ordering::Greater
+            } else if self.episode < other.episode {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+pub struct EpisodeSeason {
+    pub episode: u32,
+    pub season: u32,
+}
 
 pub struct Cache<'cache> {
     pub directory: &'cache str,
@@ -29,7 +78,6 @@ struct CacheInfo<'cache> {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CacheAnimeInfo<'cache> {
     pub directory: &'cache str,
-    pub filename: &'cache str,
     pub fullpath: &'cache str,
     pub episode: u32,
     pub season: u32,
@@ -40,7 +88,7 @@ pub struct CacheAnimeInfo<'cache> {
 pub struct EpisodeLayout {
     pub episode: u32,
     pub season: u32,
-    pub filename: String,
+    pub fullpath: String,
 }
 
 #[derive(Debug)]
@@ -72,9 +120,8 @@ impl<'cache> Cache<'cache> {
                 next_s INT DEFAULT 1 NOT NULL
             );
             CREATE TABLE IF NOT EXISTS episode (
-                filename TEXT PRIMARY KEY NOT NULL,
+                fullpath TEXT PRIMARY KEY UNIQUE NOT NULL,
                 directory TEXT NOT NULL,
-                fullpath TEXT NOT NULL,
                 episode INT DEFAULT 1 NOT NULL,
                 season INT DEFAULT 1 NOT NULL,
                 timestamp INT DEFAULT 0 NOT NULL,
@@ -119,30 +166,34 @@ impl<'cache> Cache<'cache> {
             let mut stmt = sqlite_conn
                 .prepare_cached(
                     r#"
-                INSERT OR IGNORE INTO episode (filename, directory, fullpath, episode, season)
-                VALUES (?1, ?2, ?3, ?4, ?5)
+                INSERT OR IGNORE INTO episode (fullpath, directory, episode, season)
+                VALUES (?1, ?2, ?3, ?4)
             "#,
                 )
                 .unwrap();
             let list = CONFIG.anime_dir.iter().flat_map(|v| {
                 WalkDir::new(v)
-                    .max_depth(2)
+                    .max_depth(3)
                     .min_depth(2)
                     .into_iter()
                     .map(|d| {
                         let dir = d.as_ref().unwrap();
                         let episode = Episode::parse_ep(dir.file_name().to_str().unwrap());
+                        let mut anime_directory = dir.path().parent().unwrap();
+                        dbg!(anime_directory);
+                        dbg!(dir.depth());
+                        for _ in 0..dir.depth().sub(2) {
+                            anime_directory = anime_directory.parent().unwrap();
+                            dbg!(anime_directory);
+                        }
                         (
-                            dir.file_name().to_str().unwrap().to_owned(),
-                            dir.path()
-                                .parent()
-                                .unwrap()
+                            dir.path().to_str().unwrap().to_owned(),
+                            anime_directory
                                 .file_name()
                                 .unwrap()
                                 .to_str()
                                 .unwrap()
                                 .to_owned(),
-                            dir.path().to_str().unwrap().to_owned(),
                             episode.episode,
                             episode.season,
                         )
@@ -150,7 +201,7 @@ impl<'cache> Cache<'cache> {
             });
             for i in list {
                 dbg!(&i);
-                stmt.execute(params![i.0, i.1, i.2, i.3, i.4]).unwrap();
+                stmt.execute(params![i.0, i.1, i.2, i.3]).unwrap();
             }
         });
 
@@ -162,48 +213,95 @@ impl<'cache> Cache<'cache> {
         }
     }
 
+    pub fn find_ep(&self, directory: &str, episode: EpisodeSeason) -> Option<String> {
+        let mut stmt = self
+            .sqlite_conn
+            .prepare_cached(
+                r#"
+            SELECT fullpath
+            FROM episode
+            WHERE episode = ?1 AND season = ?2 AND directory = ?3
+            "#,
+            )
+            .unwrap();
+
+        let bruh = stmt
+            .query_row(params![episode.episode, episode.season, directory], |row| {
+                let directory: String = row.get_unwrap(0);
+                Ok(directory)
+            })
+            .ok();
+
+        bruh
+    }
+
     pub fn write_finished(&mut self, current_ep: EpisodeLayout, next_ep: EpisodeLayout) {
         self.current_ep_s = current_ep;
         self.next_ep_s = next_ep;
     }
 
-    pub fn write(&self, info: CacheAnimeInfo) -> Result<()> {
+    pub fn read_ep(&self, anime_dir: &str) -> Result<Vec<EpisodeSeason>> {
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
+            SELECT episode.episode, episode.season
+            FROM anime
+            INNER JOIN episode
+            ON anime.directory = episode.directory
+            WHERE anime.directory = ?
+        "#,
+        )?;
+        let records = stmt.query_map([anime_dir], |row| {
+            Ok(EpisodeSeason {
+                episode: row.get_unwrap(0),
+                season: row.get_unwrap(1),
+            })
+        });
+        let list = records
+            .unwrap()
+            .map(|v| v.unwrap())
+            .collect::<Vec<EpisodeSeason>>();
+
+        Ok(list)
+    }
+
+    pub fn write(&self, info: CacheAnimeInfo) -> Result<()> {
+        let mut stmt = self
+            .sqlite_conn
+            .prepare_cached(
+                r#"
             INSERT OR REPLACE
             INTO anime (directory, current_ep, current_s, next_ep, next_s)
             VALUES (?1, ?2, ?3, ?4, ?5)
             "#,
-        )?;
+            )
+            .unwrap();
         let next_ep = info.episode + 1;
-        dbg!(stmt
-            .execute(params![
-                info.directory,
-                info.episode,
-                info.season,
-                next_ep,
-                info.season
-            ])
-            .unwrap());
-        let mut stmt = self.sqlite_conn.prepare_cached(
-            r#"
+        stmt.execute(params![
+            info.directory,
+            info.episode,
+            info.season,
+            next_ep,
+            info.season
+        ])
+        .unwrap();
+        let mut stmt = self
+            .sqlite_conn
+            .prepare_cached(
+                r#"
             INSERT OR REPLACE
-            INTO episode (filename, directory, fullpath, episode, season, timestamp)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INTO episode (directory, fullpath, episode, season, timestamp)
+            VALUES (?1, ?2, ?3, ?4, ?5)
             "#,
-        )?;
-        dbg!(&info);
-        dbg!(info.filename);
-        dbg!(stmt
-            .execute(params![
-                info.filename,
-                info.directory,
-                info.fullpath,
-                info.episode,
-                info.season,
-                info.timestamp,
-            ])
-            .unwrap());
+            )
+            .unwrap();
+        stmt.execute(params![
+            info.directory,
+            info.fullpath,
+            info.episode,
+            info.season,
+            info.timestamp,
+        ])
+        .unwrap();
 
         Ok(())
     }
@@ -211,7 +309,7 @@ impl<'cache> Cache<'cache> {
     pub fn read_relative_ep(&self, directory: &str) -> Result<RelativeEpisode> {
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
-            SELECT anime.current_ep, anime.current_s, episode.filename
+            SELECT anime.current_ep, anime.current_s, episode.fullpath
             FROM anime
             INNER JOIN episode
             ON episode.episode = anime.current_ep AND episode.season = anime.current_s
@@ -222,7 +320,7 @@ impl<'cache> Cache<'cache> {
             Ok(EpisodeLayout {
                 episode: row.get(0).unwrap(),
                 season: row.get(1).unwrap(),
-                filename: row.get(2).unwrap(),
+                fullpath: row.get(2).unwrap(),
             })
         });
         let current_ep = match binding {
@@ -232,14 +330,14 @@ impl<'cache> Cache<'cache> {
                 EpisodeLayout {
                     episode: 1,
                     season: 1,
-                    filename: String::default(),
+                    fullpath: String::default(),
                 }
             }
         };
 
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
-            SELECT anime.next_ep, anime.next_s, episode.filename
+            SELECT anime.next_ep, anime.next_s, episode.fullpath
             FROM anime
             INNER JOIN episode
             ON episode.episode = anime.next_ep AND episode.season = anime.next_s
@@ -250,7 +348,7 @@ impl<'cache> Cache<'cache> {
             Ok(EpisodeLayout {
                 episode: row.get(0).unwrap(),
                 season: row.get(1).unwrap(),
-                filename: row.get(2).unwrap(),
+                fullpath: row.get(2).unwrap(),
             })
         });
         let next_ep = match binding {
@@ -260,7 +358,7 @@ impl<'cache> Cache<'cache> {
                 EpisodeLayout {
                     episode: 1,
                     season: 1,
-                    filename: String::default(),
+                    fullpath: String::default(),
                 }
             }
         };
@@ -270,6 +368,20 @@ impl<'cache> Cache<'cache> {
         })
     }
 
+    pub fn close(self) {
+        self.sqlite_conn.execute(r"pragma optimize", []).unwrap();
+    }
+
+    pub fn read_current(&self, directory: &str) -> Result<String> {
+        let relative = self.read_relative_ep(directory)?;
+        Ok(relative.current_ep.fullpath)
+    }
+
+    pub fn read_next(&self, directory: &str) -> Result<String> {
+        let relative = self.read_relative_ep(directory)?;
+        Ok(relative.next_ep.fullpath)
+    }
+
     pub fn read_timestamp(&self, filename: &str) -> Result<u64> {
         let mut stmt = self
             .sqlite_conn
@@ -277,7 +389,7 @@ impl<'cache> Cache<'cache> {
                 r#"
             SELECT timestamp
             FROM episode
-            WHERE filename = ?
+            WHERE fullpath = ?
         "#,
             )
             .unwrap();
