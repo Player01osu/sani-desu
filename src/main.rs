@@ -17,7 +17,6 @@ use std::thread;
 use std::{
     borrow::Cow,
     cell::RefCell,
-    fs,
     io::{BufRead, BufReader, Write},
     process::{self, Command, Stdio},
     rc::Rc,
@@ -31,7 +30,7 @@ lazy_static! {
     static ref REG_EP: Regex =
         Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d| \d\d.|_\d\d_)"#).unwrap();
     static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
-    static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265)"#).unwrap();
+    static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265|\d\d\d\d)"#).unwrap();
 }
 
 pub fn dmenu(args: &[String], pipe: &str) -> Output {
@@ -88,23 +87,12 @@ impl<'setup> Sani<'setup> {
     pub fn start() -> Result<i32, i32> {
         let mut app = Sani::new();
 
-        // FIXME: Make more efficient
-        let mut anime_list = String::new();
-        let list = CONFIG
-            .anime_dir
-            .iter()
-            .flat_map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().file_name()));
-        for i in list {
-            anime_list.push_str(&format!("{}\n", i.to_str().unwrap()));
-        }
-        let anime_list = anime_list.trim();
-
         let dmenu_settings = &CONFIG.dmenu_settings;
         let args = Args::from(dmenu_settings);
 
         loop {
             match app.state {
-                AppState::ShowSelect => app.select_show(anime_list, &args),
+                AppState::ShowSelect => app.select_show(&args),
                 AppState::EpSelect(watched) => app.select_ep(&args, watched),
                 AppState::Watching(ref episode_file) => app.watching(Rc::clone(episode_file)),
                 AppState::Ipc => app.mpv(),
@@ -114,10 +102,12 @@ impl<'setup> Sani<'setup> {
         }
     }
 
-    fn select_show(&mut self, anime_list: &str, args: &Args) {
+    fn select_show(&mut self, args: &Args) {
+        let anime_list = &self.cache.read_list().unwrap();
         let output = dmenu(&args.args, anime_list);
         let binding = String::from_utf8(output.stdout).unwrap();
         let show_sel = binding.trim();
+
         self.anime_sel = Some(Cow::Owned(show_sel.to_owned()));
 
         dbg!(&show_sel);
@@ -140,6 +130,7 @@ impl<'setup> Sani<'setup> {
 
         self.fill_string(&mut ep_list, &mut episode_vec, watched);
         let ep_list = ep_list.trim();
+
         let output = dmenu(&args.args, ep_list);
 
         let binding = String::from_utf8(output.stdout).unwrap();
@@ -268,19 +259,6 @@ impl<'setup> Sani<'setup> {
 
 impl<'cache> Sani<'cache> {
     fn file_path(&self, episode_chosen: &str) -> Option<String> {
-        match episode_chosen {
-            "Current Episode:" => {
-                dbg!(episode_chosen);
-                self.cache
-                    .read_current(self.anime_sel.as_ref().unwrap())
-                    .ok();
-            }
-            "Next Episode:" => {
-                self.cache.read_next(self.anime_sel.as_ref().unwrap()).ok();
-            }
-            _ => (),
-        };
-
         let episode_season = self.parse_str(episode_chosen);
         self.cache
             .find_ep(self.anime_sel.as_ref().unwrap().as_ref(), episode_season)

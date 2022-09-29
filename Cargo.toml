@@ -9,12 +9,13 @@ lto = true
 
 [dependencies]
 anyhow = "*"
+chrono = "*"
 exitcode = "*"
 fork = "*"
 interprocess = "*"
+lazy_static = "*"
 nix = "*"
 regex = "*"
-lazy_static = "*"
 rusqlite = { version = "*", features = ["bundled"] }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
