@@ -167,7 +167,7 @@ impl<'cache> Cache<'cache> {
                 .unwrap();
             let list = CONFIG.anime_dir.iter().flat_map(|v| {
                 WalkDir::new(v)
-                    .max_depth(3)
+                    .max_depth(5)
                     .min_depth(2)
                     .into_iter()
                     .map(|d| {
