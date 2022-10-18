@@ -6,21 +6,14 @@ mod setup;
 use anyhow::Result;
 use args::Args;
 use cache::{Cache, CacheAnimeInfo, EpisodeSeason};
-use interprocess::local_socket::LocalSocketStream;
 use lazy_static::lazy_static;
-use nix::{sys, unistd::Pid};
 use regex::Regex;
-use serde_json::Value;
 use setup::{Config, EnvVars};
 use std::process::Output;
-use std::thread;
 use std::{
     borrow::Cow,
-    cell::RefCell,
     io::{BufRead, BufReader, Write},
     process::{self, Command, Stdio},
-    rc::Rc,
-    time::Duration,
 };
 
 use crate::cache::EpisodeLayout;
@@ -53,7 +46,7 @@ pub fn dmenu(args: &[String], pipe: &str) -> Output {
 struct Sani<'setup> {
     cache: Cache<'setup>,
     anime_sel: Option<Cow<'setup, String>>,
-    ep_sel: Option<String>,
+    ep_sel: Vec<String>,
     state: AppState,
     episode: u32,
     season: u32,
@@ -64,9 +57,8 @@ struct Sani<'setup> {
 pub enum AppState {
     ShowSelect,
     EpSelect(bool),
-    Watching(Rc<String>),
-    WriteCache,
-    Ipc,
+    Watching,
+    WriteCache(String),
     Quit(exitcode::ExitCode),
 }
 
@@ -75,7 +67,7 @@ impl<'setup> Sani<'setup> {
         Self {
             cache: Cache::new(ENV.cache.as_str()),
             anime_sel: None,
-            ep_sel: None,
+            ep_sel: Vec::default(),
             state: AppState::ShowSelect,
             episode: 0,
             season: 0,
@@ -94,9 +86,8 @@ impl<'setup> Sani<'setup> {
             match app.state {
                 AppState::ShowSelect => app.select_show(&args),
                 AppState::EpSelect(watched) => app.select_ep(&args, watched),
-                AppState::Watching(ref episode_file) => app.watching(Rc::clone(episode_file)),
-                AppState::Ipc => app.mpv(),
-                AppState::WriteCache => app.write_cache(),
+                AppState::Watching => app.watching(),
+                AppState::WriteCache(ref fullpath)  => app.write_cache(fullpath.clone()),
                 AppState::Quit(exitcode) => return app.quit(exitcode),
             }
         }
@@ -143,109 +134,47 @@ impl<'setup> Sani<'setup> {
             self.season = episode_season.season;
             self.episode = episode_season.episode;
             dbg!(&file_path);
-            self.ep_sel = Some(file_path.to_owned());
+            self.ep_sel = file_path;
 
-            match fork::fork() {
-                Ok(fork::Fork::Parent(child)) => {
-                    self.child_pid = child;
-                    self.state = AppState::Watching(Rc::new(file_path))
-                }
-                Ok(fork::Fork::Child) => self.state = AppState::Ipc,
-                Err(e) => eprintln!("{e}"),
-            };
+            self.state = AppState::Watching
         } else {
             self.state = AppState::EpSelect(true);
         }
     }
 
-    fn watching(&mut self, episode: Rc<String>) {
-        let timestamp = self
-            .cache
-            .read_timestamp(self.ep_sel.as_ref().unwrap())
-            .unwrap_or_default();
-        let timestamp_arg = format!("--start={timestamp}");
-        let args: Vec<&str> = vec![
-            &episode,
-            "--input-ipc-server=/tmp/mpvsocket",
-            &timestamp_arg,
-        ];
+    fn watching(&mut self) {
+        for episode in self.ep_sel.iter() {
+            let args: Vec<&str> = vec![
+                &episode,
+            ];
 
-        let current_ep = EpisodeLayout {
-            episode: self.episode,
-            season: self.season,
-            fullpath: self.ep_sel.as_ref().unwrap().to_string(),
-        };
+            let current_ep = EpisodeLayout {
+                episode: self.episode,
+                season: self.season,
+                fullpath: episode.clone(),
+            };
 
-        let next_ep = EpisodeLayout {
-            episode: self.episode + 1,
-            season: self.season,
-            fullpath: self.ep_sel.as_ref().unwrap().to_string(),
-        };
+            let next_ep = EpisodeLayout {
+                episode: self.episode + 1,
+                season: self.season,
+                fullpath: episode.clone(),
+            };
 
-        self.cache.write_finished(current_ep, next_ep);
+            self.cache.write_finished(current_ep, next_ep);
 
-        Command::new("mpv")
-            .args(&args)
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap();
-
-        let pid = Pid::from_raw(self.child_pid);
-        if sys::signal::kill(pid, sys::signal::SIGTERM).is_ok() {
-            thread::spawn(|| if sys::wait::wait().is_ok() {});
-        }
-        self.state = AppState::EpSelect(true);
-    }
-
-    fn mpv(&mut self) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        let term = Arc::new(AtomicBool::new(false));
-        signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term)).unwrap();
-
-        let mut mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
-
-        while !term.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(500));
-
-            let socket = mpv_socket.get_mut();
-            if socket.is_none() {
-                mpv_socket = RefCell::new(LocalSocketStream::connect("/tmp/mpvsocket").ok());
+            let status = Command::new("mpv")
+                .args(&args)
+                .spawn()
+                .unwrap()
+                .wait()
+                .unwrap();
+            if !status.success() {
                 continue;
             }
 
-            let socket = mpv_socket.get_mut();
-            let socket = socket.as_mut();
-            if let Some(conn) = socket {
-                if conn
-                    .write_all(br#"{"command":["get_property","playback-time"],"request_id":1}"#)
-                    .is_ok()
-                {
-                    conn.write_all(b"\n").unwrap();
-                    conn.flush().unwrap();
-
-                    let mut conn = BufReader::new(conn);
-                    let mut buffer = String::new();
-                    conn.read_line(&mut buffer).unwrap();
-
-                    let e = serde_json::from_str::<Value>(&buffer).unwrap();
-                    self.timestamp = match e["data"].as_f64() {
-                        Some(v) => v.trunc() as u64,
-                        None => {
-                            dbg!(buffer);
-                            return;
-                        }
-                    };
-                }
-            }
-            std::thread::sleep(Duration::from_millis(500));
+            self.state = AppState::EpSelect(true);
+            break;
         }
-
-        // SIGTERM signal will write to cache and quit.
-        // This signal is sent from parent process once
-        // mpv has quit.
-        self.state = AppState::WriteCache;
     }
 
     fn quit(self, exitcode: i32) -> Result<i32, i32> {
@@ -258,7 +187,7 @@ impl<'setup> Sani<'setup> {
 }
 
 impl<'cache> Sani<'cache> {
-    fn file_path(&self, episode_chosen: &str) -> Option<String> {
+    fn file_path(&self, episode_chosen: &str) -> Option<Vec<String>> {
         let episode_season = self.parse_str(episode_chosen);
         self.cache
             .find_ep(self.anime_sel.as_ref().unwrap().as_ref(), episode_season)
@@ -340,11 +269,11 @@ impl<'cache> Sani<'cache> {
         }
     }
 
-    fn write_cache(&mut self) {
+    fn write_cache(&mut self, fullpath: String) {
         let info = CacheAnimeInfo {
-            timestamp: self.timestamp,
             directory: self.anime_sel.as_ref().unwrap(),
-            fullpath: self.ep_sel.as_ref().unwrap(),
+            //fullpath: self.ep_sel.as_ref().unwrap(),
+            fullpath: &fullpath,
             episode: self.episode,
             season: self.season,
         };

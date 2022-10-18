@@ -51,7 +51,6 @@ impl Config {
         let mut buf = Vec::new();
         conf_file.read_to_end(&mut buf).unwrap();
 
-
         match serde_yaml::from_slice::<Config>(&buf) {
             Ok(mut v) => {
                 v.parse();

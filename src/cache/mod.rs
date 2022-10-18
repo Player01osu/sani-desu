@@ -1,3 +1,5 @@
+mod auto;
+
 use std::{fs, ops::Sub, thread};
 
 use anyhow::Result;
@@ -6,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::{episode::Episode, CONFIG, ENV};
+
+use self::auto::IMPORTS;
+
 type Directory = String;
 
 impl PartialEq for EpisodeSeason {
@@ -74,7 +79,6 @@ pub struct CacheAnimeInfo<'cache> {
     pub fullpath: &'cache str,
     pub episode: u32,
     pub season: u32,
-    pub timestamp: u64,
 }
 
 #[derive(Default, Debug)]
@@ -98,40 +102,7 @@ impl<'cache> Cache<'cache> {
             .map_err(|e| eprintln!("Failed to connect to sqlite database: {e}"))
             .unwrap();
 
-        sqlite_conn
-            .execute_batch(
-                r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = normal;
-            PRAGMA temp_store = memory;
-            PRAGMA mmap_size = 30000000000;
-            CREATE TABLE IF NOT EXISTS anime (
-                directory TEXT PRIMARY KEY UNIQUE NOT NULL,
-                current_ep INT DEFAULT 1 NOT NULL,
-                current_s INT DEFAULT 1 NOT NULL,
-                next_ep INT DEFAULT 2 NOT NULL,
-                next_s INT DEFAULT 1 NOT NULL,
-                last_watched INT
-            );
-            CREATE TABLE IF NOT EXISTS episode (
-                fullpath TEXT PRIMARY KEY UNIQUE NOT NULL,
-                directory TEXT NOT NULL,
-                episode INT DEFAULT 1 NOT NULL,
-                season INT DEFAULT 1 NOT NULL,
-                timestamp INT DEFAULT 0 NOT NULL,
-
-                CONSTRAINT fk_directory
-                FOREIGN KEY (directory)
-                REFERENCES anime (directory)
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS filename_idx
-            ON anime(directory);
-
-            CREATE INDEX IF NOT EXISTS episode_season_idx
-            ON episode(episode, season);
-            "#,
-            )
-            .unwrap();
+        sqlite_conn.execute_batch(IMPORTS).unwrap();
 
         thread::spawn(|| {
             let cache = &ENV.cache;
@@ -159,11 +130,10 @@ impl<'cache> Cache<'cache> {
 
             let mut stmt = sqlite_conn
                 .prepare_cached(
-                    r#"
+                r#"
                 INSERT OR IGNORE INTO episode (fullpath, directory, episode, season)
                 VALUES (?1, ?2, ?3, ?4)
-            "#,
-                )
+                "#,)
                 .unwrap();
             let list = CONFIG.anime_dir.iter().flat_map(|v| {
                 WalkDir::new(v)
@@ -207,7 +177,11 @@ impl<'cache> Cache<'cache> {
         }
     }
 
-    pub fn find_ep(&self, directory: &str, episode: EpisodeSeason) -> Option<String> {
+    pub fn find_ep(
+        &self,
+        directory: &str,
+        episode: EpisodeSeason
+    ) -> Option<Vec<String>> {
         let mut stmt = self
             .sqlite_conn
             .prepare_cached(
@@ -218,11 +192,21 @@ impl<'cache> Cache<'cache> {
             "#,
             )
             .unwrap();
-        stmt.query_row(params![episode.episode, episode.season, directory], |row| {
-            let directory: String = row.get_unwrap(0);
-            Ok(directory)
-        })
-        .ok()
+        let rows = stmt
+            .query_map(
+                params![episode.episode, episode.season, directory],
+                |rows| rows.get(0),
+            )
+            .ok();
+        if let Some(rows) = rows {
+            return Some(
+                rows.into_iter()
+                    .map(|r| r.unwrap())
+                    .collect::<Vec<String>>(),
+            );
+        } else {
+            return None;
+        }
     }
 
     pub fn write_finished(&mut self, current_ep: EpisodeLayout, next_ep: EpisodeLayout) {
@@ -283,8 +267,8 @@ impl<'cache> Cache<'cache> {
             .prepare_cached(
                 r#"
             INSERT OR REPLACE
-            INTO episode (directory, fullpath, episode, season, timestamp)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INTO episode (directory, fullpath, episode, season)
+            VALUES (?1, ?2, ?3, ?4)
             "#,
             )
             .unwrap();
@@ -293,7 +277,6 @@ impl<'cache> Cache<'cache> {
             info.fullpath,
             info.episode,
             info.season,
-            info.timestamp,
         ])
         .unwrap();
 
@@ -377,42 +360,23 @@ impl<'cache> Cache<'cache> {
     }
 
     pub fn read_list(&self) -> Result<Directory> {
-        let mut stmt = self.sqlite_conn.prepare_cached(r#"
+        let mut stmt = self.sqlite_conn.prepare_cached(
+            r#"
             SELECT directory
             FROM anime
             ORDER BY last_watched DESC, directory DESC
-        "#)?;
-        let directory = stmt.query_map([], |row| {
-            let directory: Directory = row.get_unwrap(0);
-            Ok(directory)
-        })?.into_iter().map(|v| {
-            v.unwrap()
-        }).collect::<Vec<Directory>>();
+        "#,
+        )?;
+        let directory = stmt
+            .query_map([], |row| {
+                let directory: Directory = row.get_unwrap(0);
+                Ok(directory)
+            })?
+            .into_iter()
+            .map(|v| v.unwrap())
+            .collect::<Vec<Directory>>();
         let directory = directory.join("\n");
 
         Ok(directory)
-    }
-
-    pub fn read_timestamp(&self, filename: &str) -> Result<u64> {
-        let mut stmt = self
-            .sqlite_conn
-            .prepare_cached(
-                r#"
-            SELECT timestamp
-            FROM episode
-            WHERE fullpath = ?
-        "#,
-            )
-            .unwrap();
-        dbg!(filename);
-
-        let timestamp: Result<u64, rusqlite::Error> = stmt.query_row([filename], |row| row.get(0));
-        match timestamp {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                dbg!(e);
-                Ok(0)
-            }
-        }
     }
 }
