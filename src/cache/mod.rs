@@ -1,6 +1,6 @@
 mod auto;
 
-use std::{fs, ops::Sub, thread};
+use std::{fs, ops::Sub, path::Path, thread};
 
 use anyhow::Result;
 use rusqlite::{params, Connection};
@@ -55,6 +55,7 @@ impl Ord for EpisodeSeason {
     }
 }
 
+#[derive(Clone, Hash, Default, Debug)]
 pub struct EpisodeSeason {
     pub episode: u32,
     pub season: u32,
@@ -62,21 +63,20 @@ pub struct EpisodeSeason {
 
 pub struct Cache<'cache> {
     pub directory: &'cache str,
-    pub current_ep_s: EpisodeLayout,
-    pub next_ep_s: EpisodeLayout,
+    pub current_ep_s: EpisodeSeason,
+    pub next_ep_s: EpisodeSeason,
     sqlite_conn: Connection,
 }
 
 #[derive(Serialize, Deserialize)]
-struct CacheInfo<'cache> {
-    #[serde(borrow)]
-    cached_ani: Vec<CacheAnimeInfo<'cache>>,
+struct CacheInfo {
+    cached_ani: Vec<CacheAnimeInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CacheAnimeInfo<'cache> {
-    pub directory: &'cache str,
-    pub fullpath: &'cache str,
+pub struct CacheAnimeInfo {
+    pub directory: String,
+    //pub fullpath: &'cache str,
     pub episode: u32,
     pub season: u32,
 }
@@ -90,13 +90,18 @@ pub struct EpisodeLayout {
 
 #[derive(Debug)]
 pub struct RelativeEpisode {
-    pub next_ep: EpisodeLayout,
-    pub current_ep: EpisodeLayout,
+    pub next_ep: EpisodeSeason,
+    pub current_ep: EpisodeSeason,
 }
 
 impl<'cache> Cache<'cache> {
     pub fn new(cache: &str) -> Self {
         let db_file = format!("{cache}/sani.db");
+
+        let mut join_thread = false;
+        if !Path::new(&db_file).is_file() {
+            join_thread = true;
+        }
 
         let sqlite_conn = Connection::open(&db_file)
             .map_err(|e| eprintln!("Failed to connect to sqlite database: {e}"))
@@ -104,7 +109,7 @@ impl<'cache> Cache<'cache> {
 
         sqlite_conn.execute_batch(IMPORTS).unwrap();
 
-        thread::spawn(|| {
+        let thread = thread::spawn(|| {
             let cache = &ENV.cache;
             let db_file = format!("{cache}/sani.db");
 
@@ -130,10 +135,11 @@ impl<'cache> Cache<'cache> {
 
             let mut stmt = sqlite_conn
                 .prepare_cached(
-                r#"
+                    r#"
                 INSERT OR IGNORE INTO episode (fullpath, directory, episode, season)
                 VALUES (?1, ?2, ?3, ?4)
-                "#,)
+                "#,
+                )
                 .unwrap();
             let list = CONFIG.anime_dir.iter().flat_map(|v| {
                 WalkDir::new(v)
@@ -144,11 +150,11 @@ impl<'cache> Cache<'cache> {
                         let dir = d.as_ref().unwrap();
                         let episode = Episode::parse_ep(dir.file_name().to_str().unwrap());
                         let mut anime_directory = dir.path().parent().unwrap();
-                        dbg!(anime_directory);
-                        dbg!(dir.depth());
+                        //dbg!(anime_directory);
+                        //dbg!(dir.depth());
                         for _ in 0..dir.depth().sub(2) {
                             anime_directory = anime_directory.parent().unwrap();
-                            dbg!(anime_directory);
+                            //dbg!(anime_directory);
                         }
                         (
                             dir.path().to_str().unwrap().to_owned(),
@@ -164,10 +170,14 @@ impl<'cache> Cache<'cache> {
                     })
             });
             for i in list {
-                dbg!(&i);
+                //dbg!(&i);
                 stmt.execute(params![i.0, i.1, i.2, i.3]).unwrap();
             }
         });
+
+        if join_thread {
+            thread.join().unwrap();
+        }
 
         Self {
             sqlite_conn,
@@ -177,11 +187,7 @@ impl<'cache> Cache<'cache> {
         }
     }
 
-    pub fn find_ep(
-        &self,
-        directory: &str,
-        episode: EpisodeSeason
-    ) -> Option<Vec<String>> {
+    pub fn find_ep(&self, directory: &str, episode: &EpisodeSeason) -> Option<Vec<String>> {
         let mut stmt = self
             .sqlite_conn
             .prepare_cached(
@@ -209,7 +215,7 @@ impl<'cache> Cache<'cache> {
         }
     }
 
-    pub fn write_finished(&mut self, current_ep: EpisodeLayout, next_ep: EpisodeLayout) {
+    pub fn write_finished(&mut self, current_ep: EpisodeSeason, next_ep: EpisodeSeason) {
         self.current_ep_s = current_ep;
         self.next_ep_s = next_ep;
     }
@@ -230,55 +236,50 @@ impl<'cache> Cache<'cache> {
                 season: row.get_unwrap(1),
             })
         });
-        let list = records
+        use itertools::Itertools;
+
+        let mut list = records
             .unwrap()
             .map(|v| v.unwrap())
+            .unique()
             .collect::<Vec<EpisodeSeason>>();
+        list.sort();
 
         Ok(list)
     }
 
     pub fn write(&self, info: CacheAnimeInfo) -> Result<()> {
-        use chrono::prelude::Utc;
-        let unix = Utc::now().timestamp();
+        thread::spawn(move || {
+            let cache = &ENV.cache;
+            let db_file = format!("{cache}/sani.db");
 
-        let mut stmt = self
-            .sqlite_conn
-            .prepare_cached(
-                r#"
+            let sqlite_conn = Connection::open(&db_file)
+                .map_err(|e| eprintln!("Failed to connect to sqlite database: {e}"))
+                .unwrap();
+
+            use chrono::prelude::Utc;
+            let unix = Utc::now().timestamp();
+
+            let mut stmt = sqlite_conn
+                .prepare_cached(
+                    r#"
             INSERT OR REPLACE
             INTO anime (directory, current_ep, current_s, next_ep, next_s, last_watched)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
-            )
+                )
+                .unwrap();
+            let next_ep = info.episode + 1;
+            stmt.execute(params![
+                info.directory,
+                info.episode,
+                info.season,
+                next_ep,
+                info.season,
+                unix
+            ])
             .unwrap();
-        let next_ep = info.episode + 1;
-        stmt.execute(params![
-            info.directory,
-            info.episode,
-            info.season,
-            next_ep,
-            info.season,
-            unix
-        ])
-        .unwrap();
-        let mut stmt = self
-            .sqlite_conn
-            .prepare_cached(
-                r#"
-            INSERT OR REPLACE
-            INTO episode (directory, fullpath, episode, season)
-            VALUES (?1, ?2, ?3, ?4)
-            "#,
-            )
-            .unwrap();
-        stmt.execute(params![
-            info.directory,
-            info.fullpath,
-            info.episode,
-            info.season,
-        ])
-        .unwrap();
+        });
 
         Ok(())
     }
@@ -286,56 +287,50 @@ impl<'cache> Cache<'cache> {
     pub fn read_relative_ep(&self, directory: &str) -> Result<RelativeEpisode> {
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
-            SELECT anime.current_ep, anime.current_s, episode.fullpath
+            SELECT anime.current_ep, anime.current_s
             FROM anime
             INNER JOIN episode
             ON episode.episode = anime.current_ep AND episode.season = anime.current_s
             WHERE anime.directory = ?
             "#,
         )?;
-        let binding: Result<EpisodeLayout, rusqlite::Error> = stmt.query_row([directory], |row| {
-            Ok(EpisodeLayout {
+        let binding: Result<EpisodeSeason, rusqlite::Error> = stmt.query_row([directory], |row| {
+            Ok(EpisodeSeason {
                 episode: row.get(0).unwrap(),
                 season: row.get(1).unwrap(),
-                fullpath: row.get(2).unwrap(),
             })
         });
         let current_ep = match binding {
             Ok(v) => v,
             Err(e) => {
-                dbg!(&e);
-                EpisodeLayout {
+                EpisodeSeason {
                     episode: 1,
                     season: 1,
-                    fullpath: String::default(),
                 }
             }
         };
 
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
-            SELECT anime.next_ep, anime.next_s, episode.fullpath
+            SELECT anime.next_ep, anime.next_s
             FROM anime
             INNER JOIN episode
             ON episode.episode = anime.next_ep AND episode.season = anime.next_s
             WHERE anime.directory = ?
             "#,
         )?;
-        let binding: Result<EpisodeLayout, rusqlite::Error> = stmt.query_row([directory], |row| {
-            Ok(EpisodeLayout {
+        let binding: Result<EpisodeSeason, rusqlite::Error> = stmt.query_row([directory], |row| {
+            Ok(EpisodeSeason {
                 episode: row.get(0).unwrap(),
                 season: row.get(1).unwrap(),
-                fullpath: row.get(2).unwrap(),
             })
         });
         let next_ep = match binding {
             Ok(v) => v,
             Err(e) => {
-                dbg!(&e);
-                EpisodeLayout {
+                EpisodeSeason {
                     episode: 1,
                     season: 1,
-                    fullpath: String::default(),
                 }
             }
         };
@@ -349,15 +344,15 @@ impl<'cache> Cache<'cache> {
         self.sqlite_conn.execute(r"pragma optimize", []).unwrap();
     }
 
-    pub fn read_current(&self, directory: &str) -> Result<String> {
-        let relative = self.read_relative_ep(directory)?;
-        Ok(relative.current_ep.fullpath)
-    }
+    //pub fn read_current(&self, directory: &str) -> Result<String> {
+    //    let relative = self.read_relative_ep(directory)?;
+    //    Ok(relative.current_ep.fullpath)
+    //}
 
-    pub fn read_next(&self, directory: &str) -> Result<String> {
-        let relative = self.read_relative_ep(directory)?;
-        Ok(relative.next_ep.fullpath)
-    }
+    //pub fn read_next(&self, directory: &str) -> Result<String> {
+    //    let relative = self.read_relative_ep(directory)?;
+    //    Ok(relative.next_ep.fullpath)
+    //}
 
     pub fn read_list(&self) -> Result<Directory> {
         let mut stmt = self.sqlite_conn.prepare_cached(
