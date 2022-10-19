@@ -1,13 +1,10 @@
 use std::{
     fs::File,
-    io::{Read},
+    io::Read,
     path::Path,
 };
 
-
-
 use super::{Config, EnvVars};
-
 
 impl Config {
     fn parse(&mut self) {

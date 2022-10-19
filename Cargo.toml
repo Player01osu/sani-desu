@@ -11,15 +11,10 @@ lto = true
 anyhow = "*"
 chrono = "*"
 exitcode = "*"
-fork = "*"
-interprocess = "*"
 itertools = "0.10.5"
 lazy_static = "*"
-nix = "*"
 regex = "*"
 rusqlite = { version = "*", features = ["bundled"] }
 serde = { version = "*", features = ["derive"] }
-serde_json = "*"
 serde_yaml = "*"
-signal-hook = "*"
 walkdir = "*"

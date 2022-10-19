@@ -76,16 +76,8 @@ struct CacheInfo {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CacheAnimeInfo {
     pub directory: String,
-    //pub fullpath: &'cache str,
     pub episode: u32,
     pub season: u32,
-}
-
-#[derive(Default, Debug)]
-pub struct EpisodeLayout {
-    pub episode: u32,
-    pub season: u32,
-    pub fullpath: String,
 }
 
 #[derive(Debug)]
@@ -150,11 +142,8 @@ impl<'cache> Cache<'cache> {
                         let dir = d.as_ref().unwrap();
                         let episode = Episode::parse_ep(dir.file_name().to_str().unwrap());
                         let mut anime_directory = dir.path().parent().unwrap();
-                        //dbg!(anime_directory);
-                        //dbg!(dir.depth());
                         for _ in 0..dir.depth().sub(2) {
                             anime_directory = anime_directory.parent().unwrap();
-                            //dbg!(anime_directory);
                         }
                         (
                             dir.path().to_str().unwrap().to_owned(),
@@ -170,11 +159,11 @@ impl<'cache> Cache<'cache> {
                     })
             });
             for i in list {
-                //dbg!(&i);
                 stmt.execute(params![i.0, i.1, i.2, i.3]).unwrap();
             }
         });
 
+        // Wait for thread if database has not been created yet.
         if join_thread {
             thread.join().unwrap();
         }
@@ -204,15 +193,11 @@ impl<'cache> Cache<'cache> {
                 |rows| rows.get(0),
             )
             .ok();
-        if let Some(rows) = rows {
-            return Some(
-                rows.into_iter()
-                    .map(|r| r.unwrap())
-                    .collect::<Vec<String>>(),
-            );
-        } else {
-            return None;
-        }
+        rows.map(|rows| {
+            rows.into_iter()
+                .map(|r| r.unwrap())
+                .collect::<Vec<String>>()
+        })
     }
 
     pub fn write_finished(&mut self, current_ep: EpisodeSeason, next_ep: EpisodeSeason) {
@@ -302,12 +287,10 @@ impl<'cache> Cache<'cache> {
         });
         let current_ep = match binding {
             Ok(v) => v,
-            Err(e) => {
-                EpisodeSeason {
-                    episode: 1,
-                    season: 1,
-                }
-            }
+            Err(e) => EpisodeSeason {
+                episode: 1,
+                season: 1,
+            },
         };
 
         let mut stmt = self.sqlite_conn.prepare_cached(
@@ -327,12 +310,10 @@ impl<'cache> Cache<'cache> {
         });
         let next_ep = match binding {
             Ok(v) => v,
-            Err(e) => {
-                EpisodeSeason {
-                    episode: 1,
-                    season: 1,
-                }
-            }
+            Err(e) => EpisodeSeason {
+                episode: 1,
+                season: 1,
+            },
         };
         Ok(RelativeEpisode {
             current_ep,
@@ -343,16 +324,6 @@ impl<'cache> Cache<'cache> {
     pub fn close(self) {
         self.sqlite_conn.execute(r"pragma optimize", []).unwrap();
     }
-
-    //pub fn read_current(&self, directory: &str) -> Result<String> {
-    //    let relative = self.read_relative_ep(directory)?;
-    //    Ok(relative.current_ep.fullpath)
-    //}
-
-    //pub fn read_next(&self, directory: &str) -> Result<String> {
-    //    let relative = self.read_relative_ep(directory)?;
-    //    Ok(relative.next_ep.fullpath)
-    //}
 
     pub fn read_list(&self) -> Result<Directory> {
         let mut stmt = self.sqlite_conn.prepare_cached(

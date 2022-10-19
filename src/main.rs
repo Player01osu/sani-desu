@@ -12,7 +12,7 @@ use setup::{Config, EnvVars};
 use std::process::Output;
 use std::{
     borrow::Cow,
-    io::{BufRead, BufReader, Write},
+    io::Write,
     process::{self, Command, Stdio},
 };
 
@@ -108,9 +108,9 @@ impl<'setup> Sani<'setup> {
         let mut ep_list = String::new();
         let anime_sel = self.anime_sel.as_ref().unwrap();
 
-        let mut episode_vec = self.cache.read_ep(anime_sel).unwrap();
+        let episode_vec = self.cache.read_ep(anime_sel).unwrap();
 
-        self.fill_string(&mut ep_list, &mut episode_vec, watched);
+        self.fill_string(&mut ep_list, &episode_vec, watched);
         let ep_list = ep_list.trim();
 
         let output = dmenu(&ARGS.args, ep_list);
@@ -133,7 +133,7 @@ impl<'setup> Sani<'setup> {
 
     fn watching(&mut self) {
         for episode in self.ep_sel.iter() {
-            let args: Vec<&str> = vec![&episode];
+            let args: Vec<&str> = vec![episode];
 
             let current_ep = EpisodeSeason {
                 episode: self.episode,
@@ -174,15 +174,13 @@ impl<'setup> Sani<'setup> {
 
 impl<'cache> Sani<'cache> {
     fn file_path(&self, episode_chosen: &str) -> Option<(Option<Vec<String>>, EpisodeSeason)> {
-        if let Some(episode_season) = self.parse_str(episode_chosen) {
-            Some((
+        self.parse_str(episode_chosen).map(|episode_season| {
+            (
                 self.cache
                     .find_ep(self.anime_sel.as_ref().unwrap().as_ref(), &episode_season),
                 episode_season,
-            ))
-        } else {
-            None
-        }
+            )
+        })
     }
 
     fn parse_str(&self, str: &str) -> Option<EpisodeSeason> {
@@ -190,12 +188,12 @@ impl<'cache> Sani<'cache> {
             "Current Episode:" => {
                 let season = self.cache.current_ep_s.season;
                 let episode = self.cache.current_ep_s.episode;
-                return Some(EpisodeSeason { episode, season });
+                Some(EpisodeSeason { episode, season })
             }
             "Next Episode:" => {
                 let season = self.cache.next_ep_s.season;
                 let episode = self.cache.next_ep_s.episode;
-                return Some(EpisodeSeason { episode, season });
+                Some(EpisodeSeason { episode, season })
             }
             str => {
                 let ep = REG_EP.find(str);
