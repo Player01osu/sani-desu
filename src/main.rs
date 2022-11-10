@@ -50,6 +50,7 @@ struct Sani<'setup> {
     state: AppState,
     episode: u32,
     season: u32,
+    string_buf: String,
 }
 
 pub enum AppState {
@@ -69,6 +70,7 @@ impl<'setup> Sani<'setup> {
             state: AppState::ShowSelect,
             episode: 0,
             season: 0,
+            string_buf: String::new(),
         }
     }
 
@@ -89,6 +91,7 @@ impl<'setup> Sani<'setup> {
     fn select_show(&mut self) {
         let anime_list = &self.cache.read_list().unwrap();
         let output = dmenu(&ARGS.args, anime_list);
+
         let binding = String::from_utf8(output.stdout).unwrap();
         let show_sel = binding.trim();
 
@@ -104,14 +107,13 @@ impl<'setup> Sani<'setup> {
     }
 
     fn select_ep(&mut self, watched: bool) {
-        // FIXME: Make more efficient
-        let mut ep_list = String::new();
+        self.string_buf.clear();
         let anime_sel = self.anime_sel.as_ref().unwrap();
 
         let episode_vec = self.cache.read_ep(anime_sel).unwrap();
 
-        self.fill_string(&mut ep_list, &episode_vec, watched);
-        let ep_list = ep_list.trim();
+        self.fill_string(&episode_vec, watched);
+        let ep_list = self.string_buf.trim();
 
         let output = dmenu(&ARGS.args, ep_list);
 
@@ -199,34 +201,34 @@ impl<'cache> Sani<'cache> {
                 let ep = REG_EP.find(str);
                 let s = REG_S.find(str);
 
-                if let Some(ep) = ep {
-                    if let Some(s) = s {
-                        let episode = ep
-                            .as_str()
-                            .chars()
-                            .filter(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .parse()
-                            .unwrap();
-                        let season = s
-                            .as_str()
-                            .chars()
-                            .filter(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .parse()
-                            .unwrap();
-                        Some(EpisodeSeason { episode, season })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                let Some(ep) = ep else {
+                    return None
+                };
+
+                let Some(s) = s else {
+                    return None
+                };
+
+                let episode = ep
+                    .as_str()
+                    .chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse()
+                    .unwrap();
+                let season = s
+                    .as_str()
+                    .chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse()
+                    .unwrap();
+                Some(EpisodeSeason { episode, season })
             }
         }
     }
 
-    fn fill_string(&mut self, ep_list: &mut String, episode_vec: &[EpisodeSeason], watched: bool) {
+    fn fill_string(&mut self, episode_vec: &[EpisodeSeason], watched: bool) {
         if !watched {
             let relative_ep = self
                 .cache
@@ -235,21 +237,21 @@ impl<'cache> Sani<'cache> {
             self.cache.current_ep_s = relative_ep.current_ep;
             self.cache.next_ep_s = relative_ep.next_ep;
         }
-        ep_list.push_str("Current Episode:\n");
+        self.string_buf.push_str("Current Episode:\n");
         let binding = format!(
             "S{:02} E{:02}\n",
             self.cache.current_ep_s.season, self.cache.current_ep_s.episode
         );
-        ep_list.push_str(&binding);
-        ep_list.push_str("Next Episode:\n");
+        self.string_buf.push_str(&binding);
+        self.string_buf.push_str("Next Episode:\n");
         let binding = format!(
             "S{:02} E{:02}\n",
             self.cache.next_ep_s.season, self.cache.next_ep_s.episode
         );
-        ep_list.push_str(&binding);
+        self.string_buf.push_str(&binding);
 
         for episode in episode_vec.iter() {
-            ep_list.push_str(&format!(
+            self.string_buf.push_str(&format!(
                 "S{:02} E{:02}\n",
                 &episode.season, &episode.episode
             ));
