@@ -21,9 +21,11 @@ lazy_static! {
     static ref CONFIG: Config = Config::generate(&ENV);
     static ref ENV: EnvVars = EnvVars::new();
     static ref REG_EP: Regex =
-        Regex::new(r#"(x256|x265| \d\d |E\d\d|x\d\d| \d\d.|_\d\d_)"#).unwrap();
-    static ref REG_S: Regex = Regex::new(r#"(x256| \d\dx|S\d\d)"#).unwrap();
-    static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265|\d{4})"#).unwrap();
+        Regex::new(r#"((_|x|E|e|EP|ep| )\d{2}(.bits|_| |-|\.|v|$))"#).unwrap();
+    static ref REG_S: Regex = Regex::new(r#"((^|S|s)\d{2}(.bits|x|X|E|e|_)|( \d{2}(e|E|_|-|x|X)|^(S|s)\d{2} ))"#).unwrap();
+    static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265|\d{4}|\d{3})|10.bits"#).unwrap();
+    static ref REG_SPECIAL: Regex =
+    Regex::new(r#"(.*OVA.*\.|NCED.*? |NCOP.*? |(-|_| )ED.*?(-|_| )|(-|_| )OP.*?)"#).unwrap();
 }
 
 pub fn dmenu(args: &[String], pipe: &str) -> Output {
