@@ -6,6 +6,7 @@ mod setup;
 use anyhow::Result;
 use args::Args;
 use cache::{Cache, CacheAnimeInfo, EpisodeSeason};
+use episode::EpisodeSpecial;
 use lazy_static::lazy_static;
 use regex::Regex;
 use setup::{Config, EnvVars};
@@ -49,6 +50,7 @@ struct Sani<'setup> {
     cache: Cache<'setup>,
     anime_sel: Option<Cow<'setup, String>>,
     ep_sel: Vec<String>,
+    ep_sel_path: String,
     state: AppState,
     episode: u32,
     season: u32,
@@ -67,11 +69,12 @@ impl<'setup> Sani<'setup> {
     fn new() -> Self {
         Self {
             cache: Cache::new(ENV.cache.as_str()),
+            state: AppState::ShowSelect,
             anime_sel: None,
             ep_sel: Vec::default(),
-            state: AppState::ShowSelect,
             episode: 0,
             season: 0,
+            ep_sel_path: Default::default(),
             string_buf: String::new(),
         }
     }
@@ -124,9 +127,14 @@ impl<'setup> Sani<'setup> {
 
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
-        } else if let Some((Some(file_path), episode_season)) = self.file_path(ep_sel) {
-            self.season = episode_season.season;
-            self.episode = episode_season.episode;
+        } else if let Some((Some(file_path), episode_special)) = self.file_path(ep_sel) {
+            match episode_special {
+                EpisodeSpecial::EpS(ep_s) => {
+                    self.season = ep_s.s;
+                    self.episode = ep_s.ep;
+                }
+                _ => (),
+            }
             self.ep_sel = file_path;
 
             self.state = AppState::Watching
@@ -140,14 +148,13 @@ impl<'setup> Sani<'setup> {
             let args: Vec<&str> = vec![episode];
 
             let current_ep = EpisodeSeason {
-                episode: self.episode,
-                season: self.season,
+                ep: self.episode,
+                s: self.season,
             };
 
-            let next_ep = EpisodeSeason {
-                episode: self.episode + 1,
-                season: self.season,
-            };
+            let next_ep = self
+                .cache
+                .next_ep(self.anime_sel.as_ref().unwrap().as_ref(), &current_ep);
 
             self.cache.write_finished(current_ep, next_ep);
 
@@ -160,6 +167,7 @@ impl<'setup> Sani<'setup> {
             if !status.success() {
                 continue;
             }
+            self.ep_sel_path = episode.to_owned();
 
             self.state = AppState::EpSelect(true);
             self.write_cache();
@@ -177,60 +185,62 @@ impl<'setup> Sani<'setup> {
 }
 
 impl<'cache> Sani<'cache> {
-    fn file_path(&self, episode_chosen: &str) -> Option<(Option<Vec<String>>, EpisodeSeason)> {
-        self.parse_str(episode_chosen).map(|episode_season| {
+    fn file_path(&self, episode_chosen: &str) -> Option<(Option<Vec<String>>, EpisodeSpecial)> {
+        self.parse_str(episode_chosen).map(|episode_special| {
             (
                 self.cache
-                    .find_ep(self.anime_sel.as_ref().unwrap().as_ref(), &episode_season),
-                episode_season,
+                    .find_ep(self.anime_sel.as_ref().unwrap().as_ref(), &episode_special),
+                episode_special,
             )
         })
     }
 
-    fn parse_str(&self, str: &str) -> Option<EpisodeSeason> {
-        match str {
+    fn parse_str(&self, episode_chosen: &str) -> Option<EpisodeSpecial> {
+        match episode_chosen {
             "Current Episode:" => {
-                let season = self.cache.current_ep_s.season;
-                let episode = self.cache.current_ep_s.episode;
-                Some(EpisodeSeason { episode, season })
+                let season = self.cache.current_ep_s.s;
+                let episode = self.cache.current_ep_s.ep;
+                Some(EpisodeSpecial::EpS(EpisodeSeason {
+                    ep: episode,
+                    s: season,
+                }))
             }
             "Next Episode:" => {
-                let season = self.cache.next_ep_s.season;
-                let episode = self.cache.next_ep_s.episode;
-                Some(EpisodeSeason { episode, season })
+                let Some(ref ep_s) = self.cache.next_ep_s else {
+                    return None;
+                };
+                let episode = ep_s.ep;
+                let season = ep_s.s;
+                Some(EpisodeSpecial::EpS(EpisodeSeason {
+                    ep: episode,
+                    s: season,
+                }))
             }
             str => {
-                let ep = REG_EP.find(str);
-                let s = REG_S.find(str);
-
-                let Some(ep) = ep else {
-                    return None
+                let Some((s, ep)) = str.split_once(' ') else {
+                    return Some(EpisodeSpecial::Special(str.to_string()));
                 };
-
-                let Some(s) = s else {
-                    return None
-                };
-
-                let episode = ep
-                    .as_str()
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect::<String>()
-                    .parse()
-                    .unwrap();
-                let season = s
-                    .as_str()
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect::<String>()
-                    .parse()
-                    .unwrap();
-                Some(EpisodeSeason { episode, season })
+                if s.chars().next().unwrap() == 'S' && ep.chars().next().unwrap() == 'E' {
+                    let s = s
+                        .chars()
+                        .filter(|c| c.is_digit(10))
+                        .collect::<String>()
+                        .parse()
+                        .unwrap();
+                    let ep = ep
+                        .chars()
+                        .filter(|c| c.is_digit(10))
+                        .collect::<String>()
+                        .parse()
+                        .unwrap();
+                    return Some(EpisodeSpecial::EpS(EpisodeSeason { ep, s }));
+                }
+                return Some(EpisodeSpecial::Special(str.to_owned()));
             }
         }
     }
 
-    fn fill_string(&mut self, episode_vec: &[EpisodeSeason], watched: bool) {
+    fn fill_string(&mut self, episode_vec: &[EpisodeSpecial], watched: bool) {
         if !watched {
             let relative_ep = self
                 .cache
@@ -242,27 +252,37 @@ impl<'cache> Sani<'cache> {
         self.string_buf.push_str("Current Episode:\n");
         let binding = format!(
             "S{:02} E{:02}\n",
-            self.cache.current_ep_s.season, self.cache.current_ep_s.episode
-        );
-        self.string_buf.push_str(&binding);
-        self.string_buf.push_str("Next Episode:\n");
-        let binding = format!(
-            "S{:02} E{:02}\n",
-            self.cache.next_ep_s.season, self.cache.next_ep_s.episode
+            self.cache.current_ep_s.s, self.cache.current_ep_s.ep
         );
         self.string_buf.push_str(&binding);
 
+        let next_ep = self.cache.next_ep(
+            self.anime_sel.as_ref().unwrap().as_ref(),
+            &self.cache.current_ep_s,
+        );
+        if let Some(next_ep_s) = &next_ep {
+            self.string_buf.push_str("Next Episode:\n");
+            let binding = format!("S{:02} E{:02}\n", next_ep_s.s, next_ep_s.ep);
+            self.string_buf.push_str(&binding);
+        }
+
         for episode in episode_vec.iter() {
-            self.string_buf.push_str(&format!(
-                "S{:02} E{:02}\n",
-                &episode.season, &episode.episode
-            ));
+            match episode {
+                EpisodeSpecial::Special(special) => {
+                    self.string_buf.push_str(&format!("{special}\n",));
+                }
+                EpisodeSpecial::EpS(ep_s) => {
+                    self.string_buf
+                        .push_str(&format!("S{:02} E{:02}\n", &ep_s.s, &ep_s.ep));
+                }
+            }
         }
     }
 
     fn write_cache(&mut self) {
         let info = CacheAnimeInfo {
-            directory: self.anime_sel.as_ref().unwrap().to_string(),
+            dir_name: self.anime_sel.as_ref().unwrap().to_string(),
+            location: self.ep_sel_path.clone(),
             episode: self.episode,
             season: self.season,
         };

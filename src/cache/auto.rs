@@ -5,28 +5,28 @@ pub const IMPORTS: &str = r#"
     PRAGMA mmap_size = 30000000000;
 
     CREATE TABLE IF NOT EXISTS anime (
-        directory TEXT PRIMARY KEY UNIQUE NOT NULL,
-        current_ep INT DEFAULT 1 NOT NULL,
-        current_s INT DEFAULT 1 NOT NULL,
-        next_ep INT DEFAULT 2 NOT NULL,
-        next_s INT DEFAULT 1 NOT NULL,
+        dir_name TEXT PRIMARY KEY NOT NULL,
+        location TEXT NOT NULL,
+        current_ep INT,
+        current_s INT,
         last_watched INT
     );
 
     CREATE TABLE IF NOT EXISTS episode (
-        fullpath TEXT PRIMARY KEY UNIQUE NOT NULL,
-        directory TEXT NOT NULL,
-        episode INT DEFAULT 1 NOT NULL,
-        season INT DEFAULT 1 NOT NULL,
+        path TEXT PRIMARY KEY UNIQUE NOT NULL,
+        dir_name TEXT NOT NULL,
+        ep INT,
+        s INT,
+        special TEXT,
 
-        CONSTRAINT fk_directory
-        FOREIGN KEY (directory)
-        REFERENCES anime (directory)
+        CONSTRAINT fk_dir_name
+        FOREIGN KEY (dir_name)
+        REFERENCES anime (dir_name)
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS filename_idx
-    ON anime(directory);
+    ON anime(dir_name);
 
     CREATE INDEX IF NOT EXISTS episode_season_idx
-    ON episode(episode, season);
+    ON episode(ep, s);
 "#;
