@@ -1,0 +1,45 @@
+# Defaults to $HOME/Videos
+#
+# Must be in YAML list
+#
+# ex:
+# anime_dir:
+#   - "/home/bruh/Videos/anime"
+#   - "/drives/external/anime"
+#   - "/drives/video-drive/anime"
+#   ect.
+
+dmenu_settings:
+  #font: "monospace:size=10"
+  font: "JetBrains Mono:size=10:style=Bold:antialias=true:autohint=true"
+
+  # Display dmenu from top or bottom.
+  #
+  #bottom: false
+
+  # Have dmenu searches be case sensitive or not.
+  #
+  #case_insensitive: false
+
+  # Height of dmenu; must be larger than 8.
+  #
+  height: 24
+
+  # Number of lines dmenu will display, and
+  # whether to have it listed vertically.
+  #
+  lines: 15
+
+  # Which monitor to display dmenu on.
+  #
+  #monitor: 0
+
+  #norm_fg: "#bbbbbb"
+
+  #norm_bg: "#222222"
+  norm_bg: "#000001"
+
+  #sel_fg:  "#eeeeee"
+
+  #sel_bg: "#bf6e1a"
+  sel_bg: "#a62ca6"
