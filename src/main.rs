@@ -127,19 +127,22 @@ impl<'setup> Sani<'setup> {
 
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
-        } else if let Some((Some(file_path), episode_special)) = self.file_path(ep_sel) {
-            match episode_special {
-                EpisodeSpecial::EpS(ep_s) => {
+            return ();
+        }
+
+        match self.file_path(ep_sel) {
+            Some((Some(file_path), episode_special)) => {
+                if let EpisodeSpecial::EpS(ep_s) = episode_special {
                     self.season = ep_s.s;
                     self.episode = ep_s.ep;
                 }
-                _ => (),
-            }
-            self.ep_sel = file_path;
+                self.ep_sel = file_path;
 
-            self.state = AppState::Watching
-        } else {
-            self.state = AppState::EpSelect(true);
+                self.state = AppState::Watching
+            }
+            _ => {
+                self.state = AppState::EpSelect(true);
+            }
         }
     }
 
