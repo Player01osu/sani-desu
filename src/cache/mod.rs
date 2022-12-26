@@ -3,7 +3,7 @@ mod auto;
 use std::{
     fs,
     ops::Sub,
-    path::{Path, PathBuf},
+    path::Path,
     thread,
 };
 
@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
+use std::hash::Hash;
 
 use crate::{
     episode::{Episode, EpisodeSpecial},
@@ -20,6 +21,13 @@ use crate::{
 use self::auto::IMPORTS;
 
 type Directory = String;
+
+#[derive(Clone, Debug)]
+pub struct EpisodeSeason {
+    pub ep: u32,
+    pub s: u32,
+}
+
 
 impl PartialEq for EpisodeSeason {
     fn eq(&self, other: &Self) -> bool {
@@ -63,10 +71,11 @@ impl Ord for EpisodeSeason {
     }
 }
 
-#[derive(Clone, Hash, Debug)]
-pub struct EpisodeSeason {
-    pub ep: u32,
-    pub s: u32,
+impl Hash for EpisodeSeason {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.s.hash(state);
+        self.ep.hash(state);
+    }
 }
 
 impl Default for EpisodeSeason {
@@ -120,7 +129,7 @@ impl<'cache> Cache<'cache> {
             let cache = &ENV.cache;
             let db_file = format!("{cache}/sani.db");
 
-            let sqlite_conn = Connection::open(&db_file)
+            let sqlite_conn = Connection::open(db_file)
                 .map_err(|e| eprintln!("Failed to connect to sqlite database: {e}"))
                 .unwrap();
 
@@ -135,7 +144,7 @@ impl<'cache> Cache<'cache> {
             let list = CONFIG
                 .anime_dir
                 .iter()
-                .flat_map(|v| fs::read_dir(&v).unwrap().map(|d| d.unwrap().path()));
+                .flat_map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().path()));
             for i in list {
                 stmt.execute(params![
                     i.file_name().unwrap().to_string_lossy(),
@@ -297,7 +306,7 @@ impl<'cache> Cache<'cache> {
             let cache = &ENV.cache;
             let db_file = format!("{cache}/sani.db");
 
-            let sqlite_conn = Connection::open(&db_file)
+            let sqlite_conn = Connection::open(db_file)
                 .map_err(|e| eprintln!("Failed to connect to sqlite database: {e}"))
                 .unwrap();
 
@@ -390,7 +399,7 @@ impl<'cache> Cache<'cache> {
         });
         let current_ep = match binding {
             Ok(v) => v,
-            Err(e) => EpisodeSeason { ep: 1, s: 1 },
+            Err(_e) => EpisodeSeason { ep: 1, s: 1 },
         };
 
         let next_ep = self.next_ep(directory, &current_ep);

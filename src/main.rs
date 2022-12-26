@@ -23,10 +23,12 @@ lazy_static! {
     static ref ENV: EnvVars = EnvVars::new();
     static ref REG_EP: Regex =
         Regex::new(r#"((_|x|E|e|EP|ep| )\d{2}(.bits|_| |-|\.|v|$))"#).unwrap();
-    static ref REG_S: Regex = Regex::new(r#"((^|S|s)\d{2}(.bits|x|X|E|e|_)|( \d{2}(e|E|_|-|x|X)|^(S|s)\d{2} ))"#).unwrap();
+    static ref REG_S: Regex =
+        Regex::new(r#"((^|S|s)\d{2}(.bits|x|X|E|e|_)|( \d{2}(e|E|_|-|x|X)|^(S|s)\d{2} ))"#)
+            .unwrap();
     static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265|\d{4}|\d{3})|10.bits"#).unwrap();
     static ref REG_SPECIAL: Regex =
-    Regex::new(r#"(.*OVA.*\.|NCED.*? |NCOP.*? |(-|_| )ED.*?(-|_| )|(-|_| )OP.*?)"#).unwrap();
+        Regex::new(r#"(.*OVA.*\.|NCED.*? |NCOP.*? |(-|_| )ED.*?(-|_| )|(-|_| )OP.*?)"#).unwrap();
 }
 
 pub fn dmenu(args: &[String], pipe: &str) -> Output {
@@ -127,7 +129,7 @@ impl<'setup> Sani<'setup> {
 
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
-            return ();
+            return ;
         }
 
         match self.file_path(ep_sel) {
@@ -223,22 +225,22 @@ impl<'cache> Sani<'cache> {
                 let Some((s, ep)) = str.split_once(' ') else {
                     return Some(EpisodeSpecial::Special(str.to_string()));
                 };
-                if s.chars().next().unwrap() == 'S' && ep.chars().next().unwrap() == 'E' {
+                if s.starts_with('S') && ep.starts_with('E') {
                     let s = s
                         .chars()
-                        .filter(|c| c.is_digit(10))
+                        .filter(|c| c.is_ascii_digit())
                         .collect::<String>()
                         .parse()
                         .unwrap();
                     let ep = ep
                         .chars()
-                        .filter(|c| c.is_digit(10))
+                        .filter(|c| c.is_ascii_digit())
                         .collect::<String>()
                         .parse()
                         .unwrap();
                     return Some(EpisodeSpecial::EpS(EpisodeSeason { ep, s }));
                 }
-                return Some(EpisodeSpecial::Special(str.to_owned()));
+                Some(EpisodeSpecial::Special(str.to_owned()))
             }
         }
     }

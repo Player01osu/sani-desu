@@ -31,15 +31,15 @@ impl PartialEq for Episode {
 
 impl PartialOrd for Episode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        use std::cmp::Ordering;
+        
         if let EpisodeSpecial::EpS(ref ep_s) = self.ep {
             if let EpisodeSpecial::EpS(ref ep_s_other) = other.ep {
-                return ep_s.partial_cmp(&ep_s_other);
+                return ep_s.partial_cmp(ep_s_other);
             }
         }
         if let EpisodeSpecial::Special(ref special) = self.ep {
             if let EpisodeSpecial::Special(ref special_other) = other.ep {
-                return special.partial_cmp(&special_other);
+                return special.partial_cmp(special_other);
             }
         }
         None
@@ -64,12 +64,12 @@ impl Ord for Episode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if let EpisodeSpecial::EpS(ref ep_s) = &self.ep {
             if let EpisodeSpecial::EpS(ref ep_s_other) = &other.ep {
-                return ep_s.cmp(&ep_s_other);
+                return ep_s.cmp(ep_s_other);
             }
         }
         if let EpisodeSpecial::Special(ref special) = self.ep {
             if let EpisodeSpecial::Special(ref special_other) = other.ep {
-                return special.cmp(&special_other);
+                return special.cmp(special_other);
             }
         }
         match self.ep {

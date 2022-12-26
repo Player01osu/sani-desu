@@ -40,7 +40,7 @@ fn init_path(check_path: Vec<String>) -> String {
             dir.push(c);
         }
         fs::create_dir_all(Path::new(&dir)).unwrap();
-        File::create(&default_path).unwrap();
+        File::create(default_path).unwrap();
         default_path.to_owned()
     } else {
         fs::create_dir_all(Path::new(&default_path)).unwrap();
