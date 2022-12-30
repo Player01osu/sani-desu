@@ -99,7 +99,6 @@ struct CacheInfo {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CacheAnimeInfo {
     pub dir_name: String,
-    pub location: String,
     pub episode: u32,
     pub season: u32,
 }
@@ -133,11 +132,19 @@ impl<'cache> Cache<'cache> {
                 .map_err(|e| eprintln!("Failed to connect to sqlite database: {e}"))
                 .unwrap();
 
-            let mut stmt = sqlite_conn
+            let mut stmt_anime = sqlite_conn
                 .prepare_cached(
                     r#"
-                INSERT OR IGNORE INTO anime (dir_name, location)
-                VALUES (?1, ?2)
+                INSERT OR IGNORE INTO anime (dir_name)
+                VALUES (?1)
+            "#,
+                )
+                .unwrap();
+            let mut stmt_location = sqlite_conn
+                .prepare_cached(
+                    r#"
+                INSERT OR IGNORE INTO anime (location)
+                VALUES (?1)
             "#,
                 )
                 .unwrap();
@@ -146,8 +153,11 @@ impl<'cache> Cache<'cache> {
                 .iter()
                 .flat_map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().path()));
             for i in list {
-                stmt.execute(params![
+                stmt_anime.execute(params![
                     i.file_name().unwrap().to_string_lossy(),
+                ])
+                .unwrap();
+                stmt_location.execute(params![
                     i.to_string_lossy()
                 ])
                 .unwrap();
@@ -317,14 +327,13 @@ impl<'cache> Cache<'cache> {
                 .prepare_cached(
                     r#"
             INSERT OR REPLACE
-            INTO anime (dir_name, location, current_ep, current_s, last_watched)
+            INTO anime (dir_name, current_ep, current_s, last_watched)
             VALUES (?1, ?2, ?3, ?4, ?5)
             "#,
                 )
                 .unwrap();
             stmt.execute(params![
                 info.dir_name,
-                info.location,
                 info.episode,
                 info.season,
                 unix
@@ -417,9 +426,10 @@ impl<'cache> Cache<'cache> {
     pub fn read_list(&self) -> Result<Directory> {
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
-            SELECT dir_name, location
+            SELECT anime.dir_name, location.location
             FROM anime
-            ORDER BY last_watched DESC, dir_name DESC
+            INNER JOIN location ON anime.dir_name = location.dir_name
+            ORDER BY anime.last_watched DESC, anime.dir_name DESC
         "#,
         )?;
         let directory = stmt
