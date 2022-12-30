@@ -5,11 +5,21 @@ pub const IMPORTS: &str = r#"
     PRAGMA mmap_size = 30000000000;
 
     CREATE TABLE IF NOT EXISTS anime (
-        dir_name TEXT PRIMARY KEY NOT NULL,
-        location TEXT NOT NULL,
+        dir_name TEXT NOT NULL,
         current_ep INT,
         current_s INT,
-        last_watched INT
+        last_watched INT,
+
+        PRIMARY KEY (dir_name)
+    );
+
+    CREATE TABEL IF NOT EXISTS location (
+        dir_name TEXT NOT NULL,
+        location PRIMARY KEY TEXT NOT NULL,
+
+        CONSTRAINT fk_dir_name
+        FOREIGN KEY (dir_name)
+        REFERENCES anime (dir_name)
     );
 
     CREATE TABLE IF NOT EXISTS episode (
