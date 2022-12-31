@@ -287,7 +287,6 @@ impl<'cache> Sani<'cache> {
     fn write_cache(&mut self) {
         let info = CacheAnimeInfo {
             dir_name: self.anime_sel.as_ref().unwrap().to_string(),
-            location: self.ep_sel_path.clone(),
             episode: self.episode,
             season: self.season,
         };

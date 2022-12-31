@@ -143,11 +143,12 @@ impl<'cache> Cache<'cache> {
             let mut stmt_location = sqlite_conn
                 .prepare_cached(
                     r#"
-                INSERT OR IGNORE INTO anime (location)
-                VALUES (?1)
+                INSERT OR IGNORE INTO location (dir_name, location)
+                VALUES (?1, ?2)
             "#,
                 )
                 .unwrap();
+
             let list = CONFIG
                 .anime_dir
                 .iter()
@@ -157,7 +158,9 @@ impl<'cache> Cache<'cache> {
                     i.file_name().unwrap().to_string_lossy(),
                 ])
                 .unwrap();
+
                 stmt_location.execute(params![
+                    i.file_name().unwrap().to_string_lossy(),
                     i.to_string_lossy()
                 ])
                 .unwrap();
@@ -328,7 +331,7 @@ impl<'cache> Cache<'cache> {
                     r#"
             INSERT OR REPLACE
             INTO anime (dir_name, current_ep, current_s, last_watched)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            VALUES (?1, ?2, ?3, ?4)
             "#,
                 )
                 .unwrap();

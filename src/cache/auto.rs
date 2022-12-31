@@ -13,9 +13,9 @@ pub const IMPORTS: &str = r#"
         PRIMARY KEY (dir_name)
     );
 
-    CREATE TABEL IF NOT EXISTS location (
+    CREATE TABLE IF NOT EXISTS location (
+        location TEXT PRIMARY KEY NOT NULL,
         dir_name TEXT NOT NULL,
-        location PRIMARY KEY TEXT NOT NULL,
 
         CONSTRAINT fk_dir_name
         FOREIGN KEY (dir_name)
