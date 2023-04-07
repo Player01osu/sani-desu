@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::{cache::EpisodeNumbered, REG_EP, REG_PARSE_OUT, REG_S, REG_SPECIAL};
+use crate::{cache::EpisodeNumbered, REG_PARSE_OUT, REG_SPECIAL, REG_EPS};
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum EpisodeKind {
@@ -94,56 +94,33 @@ impl Ord for Episode {
     }
 }
 
-impl Episode {
-    pub fn from_filename(filename: &str) -> Episode {
-        let mut ep = 1u32;
-        let mut s = 1u32;
+impl FromStr for Episode {
+    type Err = anyhow::Error;
 
+    fn from_str(filename: &str) -> Result<Self, Self::Err> {
         let special_iter = REG_SPECIAL.find(filename);
         if let Some(i) = special_iter {
             let episode_str = i.as_str().to_owned();
             let ep = EpisodeKind::Special(episode_str);
-            return Episode {
+            return Ok(Episode {
                 dir_name: filename.to_owned(),
                 ep,
-            };
+            });
         }
 
-        let ep_iter = REG_EP.find(filename);
-        let s_iter = REG_S.find(filename);
+        let parsed_out = REG_PARSE_OUT.replace_all(filename, "");
+        let parsed_out = parsed_out.as_ref();
 
-        if let Some(i) = ep_iter {
-            if !REG_PARSE_OUT.is_match(i.as_str()) {
-                let ep_n = i
-                    .as_str()
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect::<String>()
-                    .parse()
-                    .unwrap();
-                ep = ep_n;
-            }
-        }
+        let Some(captures) = REG_EPS.captures(parsed_out) else {
+            return Ok(Self { dir_name: filename.to_owned(), ep: EpisodeKind::Numbered(EpisodeNumbered { ep: 1, s: 1 })});
+        };
 
-        if let Some(i) = s_iter {
-            if !REG_PARSE_OUT.is_match(i.as_str()) {
-                let s_n = i
-                    .as_str()
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect::<String>()
-                    .parse()
-                    .unwrap();
-                s = s_n;
-            }
-        }
+        let ep = captures.name("e").unwrap().as_str().parse().expect("Should not fail");
+        let s = captures.name("s").map(|m| m.as_str().parse().expect("Should not fail")).unwrap_or(1);
 
-        Episode {
+        Ok(Episode {
             dir_name: filename.to_owned(),
-            ep: EpisodeKind::Numbered(EpisodeNumbered {
-                ep,
-                s,
-            })
-        }
+            ep: EpisodeKind::Numbered(EpisodeNumbered { ep, s }),
+        })
     }
 }

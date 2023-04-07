@@ -5,8 +5,8 @@ mod setup;
 
 use anyhow::Result;
 use args::Args;
-use cache::{Cache, CacheAnimeInfo, EpisodeSeason};
-use episode::EpisodeSpecial;
+use cache::{Cache, CacheAnimeInfo, EpisodeNumbered};
+use episode::EpisodeKind;
 use lazy_static::lazy_static;
 use regex::Regex;
 use setup::{Config, EnvVars};
@@ -21,11 +21,7 @@ lazy_static! {
     static ref ARGS: Args = Args::from(&CONFIG.dmenu_settings);
     static ref CONFIG: Config = Config::generate(&ENV);
     static ref ENV: EnvVars = EnvVars::new();
-    static ref REG_EP: Regex =
-        Regex::new(r#"((_|x|E|e|EP|ep| )\d{2}(.bits|_| |-|\.|v|$))"#).unwrap();
-    static ref REG_S: Regex =
-        Regex::new(r#"((^|S|s)\d{2}(.bits|x|X|E|e|_)|( \d{2}(e|E|_|-|x|X)|^(S|s)\d{2} ))"#)
-            .unwrap();
+    static ref REG_EPS: Regex = Regex::new(r#"(?:(?:^|S|s)(?P<s>\d{2}))?(?:_|x|E|e|EP|ep| )(?P<e>\d{1,2})(?:.bits|_| |-|\.|v|$)"#).unwrap();
     static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265|\d{4}|\d{3})|10.bits"#).unwrap();
     static ref REG_SPECIAL: Regex =
         Regex::new(r#"(.*OVA.*\.|NCED.*? |NCOP.*? |(-|_| )ED.*?(-|_| )|(-|_| )OP.*?)"#).unwrap();
@@ -134,7 +130,7 @@ impl<'setup> Sani<'setup> {
 
         match self.file_path(ep_sel) {
             Some((Some(file_path), episode_special)) => {
-                if let EpisodeSpecial::EpS(ep_s) = episode_special {
+                if let EpisodeKind::Numbered(ep_s) = episode_special {
                     self.season = ep_s.s;
                     self.episode = ep_s.ep;
                 }
@@ -152,7 +148,7 @@ impl<'setup> Sani<'setup> {
         for episode in self.ep_sel.iter() {
             let args: Vec<&str> = vec![episode];
 
-            let current_ep = EpisodeSeason {
+            let current_ep = EpisodeNumbered {
                 ep: self.episode,
                 s: self.season,
             };
@@ -190,7 +186,7 @@ impl<'setup> Sani<'setup> {
 }
 
 impl<'cache> Sani<'cache> {
-    fn file_path(&self, episode_chosen: &str) -> Option<(Option<Vec<String>>, EpisodeSpecial)> {
+    fn file_path(&self, episode_chosen: &str) -> Option<(Option<Vec<String>>, EpisodeKind)> {
         self.parse_str(episode_chosen).map(|episode_special| {
             (
                 self.cache
@@ -200,12 +196,12 @@ impl<'cache> Sani<'cache> {
         })
     }
 
-    fn parse_str(&self, episode_chosen: &str) -> Option<EpisodeSpecial> {
+    fn parse_str(&self, episode_chosen: &str) -> Option<EpisodeKind> {
         match episode_chosen {
             "Current Episode:" => {
                 let season = self.cache.current_ep_s.s;
                 let episode = self.cache.current_ep_s.ep;
-                Some(EpisodeSpecial::EpS(EpisodeSeason {
+                Some(EpisodeKind::Numbered(EpisodeNumbered {
                     ep: episode,
                     s: season,
                 }))
@@ -216,14 +212,14 @@ impl<'cache> Sani<'cache> {
                 };
                 let episode = ep_s.ep;
                 let season = ep_s.s;
-                Some(EpisodeSpecial::EpS(EpisodeSeason {
+                Some(EpisodeKind::Numbered(EpisodeNumbered {
                     ep: episode,
                     s: season,
                 }))
             }
             str => {
                 let Some((s, ep)) = str.split_once(' ') else {
-                    return Some(EpisodeSpecial::Special(str.to_string()));
+                    return Some(EpisodeKind::Special(str.to_string()));
                 };
                 if s.starts_with('S') && ep.starts_with('E') {
                     let s = s
@@ -238,14 +234,14 @@ impl<'cache> Sani<'cache> {
                         .collect::<String>()
                         .parse()
                         .unwrap();
-                    return Some(EpisodeSpecial::EpS(EpisodeSeason { ep, s }));
+                    return Some(EpisodeKind::Numbered(EpisodeNumbered { ep, s }));
                 }
-                Some(EpisodeSpecial::Special(str.to_owned()))
+                Some(EpisodeKind::Special(str.to_owned()))
             }
         }
     }
 
-    fn fill_string(&mut self, episode_vec: &[EpisodeSpecial], watched: bool) {
+    fn fill_string(&mut self, episode_vec: &[EpisodeKind], watched: bool) {
         if !watched {
             let relative_ep = self
                 .cache
@@ -273,10 +269,10 @@ impl<'cache> Sani<'cache> {
 
         for episode in episode_vec.iter() {
             match episode {
-                EpisodeSpecial::Special(special) => {
+                EpisodeKind::Special(special) => {
                     self.string_buf.push_str(&format!("{special}\n",));
                 }
-                EpisodeSpecial::EpS(ep_s) => {
+                EpisodeKind::Numbered(ep_s) => {
                     self.string_buf
                         .push_str(&format!("S{:02} E{:02}\n", &ep_s.s, &ep_s.ep));
                 }

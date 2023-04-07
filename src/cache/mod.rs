@@ -1,17 +1,12 @@
 mod auto;
 
-use std::{
-    fs,
-    ops::Sub,
-    path::Path,
-    thread,
-};
+use std::{fs, ops::Sub, path::Path, thread, str::FromStr};
 
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use walkdir::WalkDir;
 use std::hash::Hash;
+use walkdir::WalkDir;
 
 use crate::{
     episode::{Episode, EpisodeKind},
@@ -27,7 +22,6 @@ pub struct EpisodeNumbered {
     pub ep: u32,
     pub s: u32,
 }
-
 
 impl PartialEq for EpisodeNumbered {
     fn eq(&self, other: &Self) -> bool {
@@ -51,6 +45,7 @@ impl PartialOrd for EpisodeNumbered {
         }
     }
 }
+
 
 impl Eq for EpisodeNumbered {}
 
@@ -155,16 +150,16 @@ impl<'cache> Cache<'cache> {
                 .filter_map(|v| fs::read_dir(v).ok())
                 .flat_map(|v| v.map(|d| d.unwrap().path()));
             for i in list {
-                stmt_anime.execute(params![
-                    i.file_name().unwrap().to_string_lossy(),
-                ])
-                .unwrap();
+                stmt_anime
+                    .execute(params![i.file_name().unwrap().to_string_lossy(),])
+                    .unwrap();
 
-                stmt_location.execute(params![
-                    i.file_name().unwrap().to_string_lossy(),
-                    i.to_string_lossy()
-                ])
-                .unwrap();
+                stmt_location
+                    .execute(params![
+                        i.file_name().unwrap().to_string_lossy(),
+                        i.to_string_lossy()
+                    ])
+                    .unwrap();
             }
 
             let mut stmt = sqlite_conn
@@ -180,9 +175,16 @@ impl<'cache> Cache<'cache> {
                     .max_depth(5)
                     .min_depth(2)
                     .into_iter()
-                    .filter_map(|d| {
-                        let path = d.as_ref().ok()?;
-                        let episode = Episode::from_filename(path.file_name().to_str().unwrap());
+                    .filter_map(|d| Some(d.ok()?))
+                    .filter(|d| {
+                        d.file_type().is_file()
+                            && d.path()
+                                .extension()
+                                .map(|e| e == "mkv" || e == "mp4" || e == "ts")
+                                .unwrap_or(false)
+                    })
+                    .filter_map(|path| {
+                        let episode = Episode::from_str(path.file_name().to_str().unwrap()).ok()?;
                         let mut anime_directory = path.path().parent().unwrap();
 
                         // Walk to parent directory
@@ -279,7 +281,11 @@ impl<'cache> Cache<'cache> {
         }
     }
 
-    pub fn write_finished(&mut self, current_ep: EpisodeNumbered, next_ep: Option<EpisodeNumbered>) {
+    pub fn write_finished(
+        &mut self,
+        current_ep: EpisodeNumbered,
+        next_ep: Option<EpisodeNumbered>,
+    ) {
         self.current_ep_s = current_ep;
         self.next_ep_s = next_ep;
     }
@@ -336,13 +342,8 @@ impl<'cache> Cache<'cache> {
             "#,
                 )
                 .unwrap();
-            stmt.execute(params![
-                info.dir_name,
-                info.episode,
-                info.season,
-                unix
-            ])
-            .unwrap();
+            stmt.execute(params![info.dir_name, info.episode, info.season, unix])
+                .unwrap();
         });
 
         Ok(())
@@ -404,12 +405,13 @@ impl<'cache> Cache<'cache> {
             WHERE anime.dir_name = ?
             "#,
         )?;
-        let binding: Result<EpisodeNumbered, rusqlite::Error> = stmt.query_row([directory], |row| {
-            Ok(EpisodeNumbered {
-                ep: row.get(0).unwrap(),
-                s: row.get(1).unwrap(),
-            })
-        });
+        let binding: Result<EpisodeNumbered, rusqlite::Error> =
+            stmt.query_row([directory], |row| {
+                Ok(EpisodeNumbered {
+                    ep: row.get(0).unwrap(),
+                    s: row.get(1).unwrap(),
+                })
+            });
         let current_ep = match binding {
             Ok(v) => v,
             Err(_e) => EpisodeNumbered { ep: 1, s: 1 },
