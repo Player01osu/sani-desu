@@ -152,7 +152,8 @@ impl<'cache> Cache<'cache> {
             let list = CONFIG
                 .anime_dir
                 .iter()
-                .flat_map(|v| fs::read_dir(v).unwrap().map(|d| d.unwrap().path()));
+                .filter_map(|v| fs::read_dir(v).ok())
+                .flat_map(|v| v.map(|d| d.unwrap().path()));
             for i in list {
                 stmt_anime.execute(params![
                     i.file_name().unwrap().to_string_lossy(),
@@ -179,8 +180,8 @@ impl<'cache> Cache<'cache> {
                     .max_depth(5)
                     .min_depth(2)
                     .into_iter()
-                    .map(|d| {
-                        let path = d.as_ref().unwrap();
+                    .filter_map(|d| {
+                        let path = d.as_ref().ok()?;
                         let episode = Episode::from_filename(path.file_name().to_str().unwrap());
                         let mut anime_directory = path.path().parent().unwrap();
 
@@ -188,7 +189,7 @@ impl<'cache> Cache<'cache> {
                         for _ in 0..path.depth().sub(2) {
                             anime_directory = anime_directory.parent().unwrap();
                         }
-                        (
+                        Some((
                             path.path().to_str().unwrap().to_owned(),
                             anime_directory
                                 .file_name()
@@ -197,7 +198,7 @@ impl<'cache> Cache<'cache> {
                                 .unwrap()
                                 .to_owned(),
                             episode.ep,
-                        )
+                        ))
                     })
             });
             for i in list {
