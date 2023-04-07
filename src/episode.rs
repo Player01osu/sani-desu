@@ -45,18 +45,6 @@ impl PartialOrd for Episode {
             }
         }
         None
-
-        //if self.season > other.season {
-        //    Some(Ordering::Greater)
-        //} else if self.season < other.season {
-        //    Some(Ordering::Less)
-        //} else if self.episode > other.episode {
-        //    Some(Ordering::Greater)
-        //} else if self.episode < other.episode {
-        //    Some(Ordering::Less)
-        //} else {
-        //    Some(Ordering::Equal)
-        //}
     }
 }
 
@@ -78,19 +66,6 @@ impl Ord for Episode {
             EpisodeKind::Numbered(_) => std::cmp::Ordering::Greater,
             EpisodeKind::Special(_) => std::cmp::Ordering::Less,
         }
-
-        //use std::cmp::Ordering;
-        //if self.season > other.season {
-        //    Ordering::Greater
-        //} else if self.season < other.season {
-        //    Ordering::Less
-        //} else if self.episode > other.episode {
-        //    Ordering::Greater
-        //} else if self.episode < other.episode {
-        //    Ordering::Less
-        //} else {
-        //    Ordering::Equal
-        //}
     }
 }
 
