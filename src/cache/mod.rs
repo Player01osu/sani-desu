@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use std::hash::Hash;
 
 use crate::{
-    episode::{Episode, EpisodeSpecial},
+    episode::{Episode, EpisodeKind},
     CONFIG, ENV,
 };
 
@@ -23,19 +23,19 @@ use self::auto::IMPORTS;
 type Directory = String;
 
 #[derive(Clone, Debug)]
-pub struct EpisodeSeason {
+pub struct EpisodeNumbered {
     pub ep: u32,
     pub s: u32,
 }
 
 
-impl PartialEq for EpisodeSeason {
+impl PartialEq for EpisodeNumbered {
     fn eq(&self, other: &Self) -> bool {
         self.ep == other.ep && self.s == other.s
     }
 }
 
-impl PartialOrd for EpisodeSeason {
+impl PartialOrd for EpisodeNumbered {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering;
         if self.s > other.s {
@@ -52,9 +52,9 @@ impl PartialOrd for EpisodeSeason {
     }
 }
 
-impl Eq for EpisodeSeason {}
+impl Eq for EpisodeNumbered {}
 
-impl Ord for EpisodeSeason {
+impl Ord for EpisodeNumbered {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
         if self.s > other.s {
@@ -71,14 +71,14 @@ impl Ord for EpisodeSeason {
     }
 }
 
-impl Hash for EpisodeSeason {
+impl Hash for EpisodeNumbered {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.s.hash(state);
         self.ep.hash(state);
     }
 }
 
-impl Default for EpisodeSeason {
+impl Default for EpisodeNumbered {
     fn default() -> Self {
         Self { ep: 1, s: 1 }
     }
@@ -86,8 +86,8 @@ impl Default for EpisodeSeason {
 
 pub struct Cache<'cache> {
     pub directory: &'cache str,
-    pub current_ep_s: EpisodeSeason,
-    pub next_ep_s: Option<EpisodeSeason>,
+    pub current_ep_s: EpisodeNumbered,
+    pub next_ep_s: Option<EpisodeNumbered>,
     sqlite_conn: Connection,
 }
 
@@ -105,8 +105,8 @@ pub struct CacheAnimeInfo {
 
 #[derive(Debug)]
 pub struct RelativeEpisode {
-    pub current_ep: EpisodeSeason,
-    pub next_ep: Option<EpisodeSeason>,
+    pub current_ep: EpisodeNumbered,
+    pub next_ep: Option<EpisodeNumbered>,
 }
 
 impl<'cache> Cache<'cache> {
@@ -203,11 +203,11 @@ impl<'cache> Cache<'cache> {
             });
             for i in list {
                 match i.2 {
-                    EpisodeSpecial::EpS(ep_s) => {
+                    EpisodeKind::Numbered(ep_s) => {
                         stmt.execute(params![i.0, i.1, ep_s.ep, ep_s.s, None::<String>])
                             .unwrap();
                     }
-                    EpisodeSpecial::Special(special) => {
+                    EpisodeKind::Special(special) => {
                         stmt.execute(params![i.0, i.1, None::<u32>, None::<u32>, special.trim()])
                             .unwrap();
                     }
@@ -228,9 +228,9 @@ impl<'cache> Cache<'cache> {
         }
     }
 
-    pub fn find_ep(&self, directory: &str, episode: &EpisodeSpecial) -> Option<Vec<String>> {
+    pub fn find_ep(&self, directory: &str, episode: &EpisodeKind) -> Option<Vec<String>> {
         match episode {
-            EpisodeSpecial::EpS(ep_s) => {
+            EpisodeKind::Numbered(ep_s) => {
                 let mut stmt = self
                     .sqlite_conn
                     .prepare_cached(
@@ -250,7 +250,7 @@ impl<'cache> Cache<'cache> {
                         .collect::<Vec<String>>()
                 })
             }
-            EpisodeSpecial::Special(special) => {
+            EpisodeKind::Special(special) => {
                 let mut stmt = self
                     .sqlite_conn
                     .prepare_cached(
@@ -279,12 +279,12 @@ impl<'cache> Cache<'cache> {
         }
     }
 
-    pub fn write_finished(&mut self, current_ep: EpisodeSeason, next_ep: Option<EpisodeSeason>) {
+    pub fn write_finished(&mut self, current_ep: EpisodeNumbered, next_ep: Option<EpisodeNumbered>) {
         self.current_ep_s = current_ep;
         self.next_ep_s = next_ep;
     }
 
-    pub fn read_ep(&self, anime_dir: &str) -> Result<Vec<EpisodeSpecial>> {
+    pub fn read_ep(&self, anime_dir: &str) -> Result<Vec<EpisodeKind>> {
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
             SELECT episode.ep, episode.s, episode.special
@@ -296,8 +296,8 @@ impl<'cache> Cache<'cache> {
         )?;
         let records = stmt.query_map([anime_dir], |row| {
             match row.get_unwrap::<_, Option<String>>(2) {
-                Some(special) => Ok(EpisodeSpecial::Special(special)),
-                None => Ok(EpisodeSpecial::EpS(EpisodeSeason {
+                Some(special) => Ok(EpisodeKind::Special(special)),
+                None => Ok(EpisodeKind::Numbered(EpisodeNumbered {
                     ep: row.get_unwrap(0),
                     s: row.get_unwrap(1),
                 })),
@@ -309,7 +309,7 @@ impl<'cache> Cache<'cache> {
             .unwrap()
             .map(|v| v.unwrap())
             .unique()
-            .collect::<Vec<EpisodeSpecial>>();
+            .collect::<Vec<EpisodeKind>>();
         list.sort();
 
         Ok(list)
@@ -351,7 +351,7 @@ impl<'cache> Cache<'cache> {
     pub fn check_ep_s_exist_cache(
         &self,
         directory: impl AsRef<str> + std::fmt::Debug,
-        ep_s: &EpisodeSeason,
+        ep_s: &EpisodeNumbered,
     ) -> Result<bool> {
         let mut stmt = self.sqlite_conn.prepare_cached(
             r#"
@@ -367,9 +367,9 @@ impl<'cache> Cache<'cache> {
     pub fn next_ep(
         &self,
         directory: impl AsRef<str>,
-        current_ep_s: &EpisodeSeason,
-    ) -> Option<EpisodeSeason> {
-        let next_ep_s = EpisodeSeason {
+        current_ep_s: &EpisodeNumbered,
+    ) -> Option<EpisodeNumbered> {
+        let next_ep_s = EpisodeNumbered {
             ep: current_ep_s.ep + 1,
             s: current_ep_s.s,
         };
@@ -381,7 +381,7 @@ impl<'cache> Cache<'cache> {
             return Some(next_ep_s);
         }
         // Check next season
-        let next_ep_s = EpisodeSeason {
+        let next_ep_s = EpisodeNumbered {
             ep: 1,
             s: current_ep_s.s + 1,
         };
@@ -404,15 +404,15 @@ impl<'cache> Cache<'cache> {
             WHERE anime.dir_name = ?
             "#,
         )?;
-        let binding: Result<EpisodeSeason, rusqlite::Error> = stmt.query_row([directory], |row| {
-            Ok(EpisodeSeason {
+        let binding: Result<EpisodeNumbered, rusqlite::Error> = stmt.query_row([directory], |row| {
+            Ok(EpisodeNumbered {
                 ep: row.get(0).unwrap(),
                 s: row.get(1).unwrap(),
             })
         });
         let current_ep = match binding {
             Ok(v) => v,
-            Err(_e) => EpisodeSeason { ep: 1, s: 1 },
+            Err(_e) => EpisodeNumbered { ep: 1, s: 1 },
         };
 
         let next_ep = self.next_ep(directory, &current_ep);

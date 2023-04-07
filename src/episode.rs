@@ -1,27 +1,29 @@
-use crate::{cache::EpisodeSeason, REG_EP, REG_PARSE_OUT, REG_S, REG_SPECIAL};
+use std::str::FromStr;
+
+use crate::{cache::EpisodeNumbered, REG_EP, REG_PARSE_OUT, REG_S, REG_SPECIAL};
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum EpisodeSpecial {
-    EpS(EpisodeSeason),
+pub enum EpisodeKind {
+    Numbered(EpisodeNumbered),
     Special(String),
 }
 
-impl Default for EpisodeSpecial {
+impl Default for EpisodeKind {
     fn default() -> Self {
-        EpisodeSpecial::EpS(EpisodeSeason::default())
+        EpisodeKind::Numbered(EpisodeNumbered::default())
     }
 }
 
 #[derive(Debug, Default)]
 pub struct Episode {
     pub dir_name: String,
-    pub ep: EpisodeSpecial,
+    pub ep: EpisodeKind,
 }
 
 impl PartialEq for Episode {
     fn eq(&self, other: &Self) -> bool {
-        if let EpisodeSpecial::EpS(ref ep_s) = self.ep {
-            if let EpisodeSpecial::EpS(ref ep_s_other) = other.ep {
+        if let EpisodeKind::Numbered(ref ep_s) = self.ep {
+            if let EpisodeKind::Numbered(ref ep_s_other) = other.ep {
                 return ep_s == ep_s_other;
             }
         }
@@ -31,14 +33,14 @@ impl PartialEq for Episode {
 
 impl PartialOrd for Episode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        
-        if let EpisodeSpecial::EpS(ref ep_s) = self.ep {
-            if let EpisodeSpecial::EpS(ref ep_s_other) = other.ep {
+
+        if let EpisodeKind::Numbered(ref ep_s) = self.ep {
+            if let EpisodeKind::Numbered(ref ep_s_other) = other.ep {
                 return ep_s.partial_cmp(ep_s_other);
             }
         }
-        if let EpisodeSpecial::Special(ref special) = self.ep {
-            if let EpisodeSpecial::Special(ref special_other) = other.ep {
+        if let EpisodeKind::Special(ref special) = self.ep {
+            if let EpisodeKind::Special(ref special_other) = other.ep {
                 return special.partial_cmp(special_other);
             }
         }
@@ -62,19 +64,19 @@ impl Eq for Episode {}
 
 impl Ord for Episode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if let EpisodeSpecial::EpS(ref ep_s) = &self.ep {
-            if let EpisodeSpecial::EpS(ref ep_s_other) = &other.ep {
+        if let EpisodeKind::Numbered(ref ep_s) = &self.ep {
+            if let EpisodeKind::Numbered(ref ep_s_other) = &other.ep {
                 return ep_s.cmp(ep_s_other);
             }
         }
-        if let EpisodeSpecial::Special(ref special) = self.ep {
-            if let EpisodeSpecial::Special(ref special_other) = other.ep {
+        if let EpisodeKind::Special(ref special) = self.ep {
+            if let EpisodeKind::Special(ref special_other) = other.ep {
                 return special.cmp(special_other);
             }
         }
         match self.ep {
-            EpisodeSpecial::EpS(_) => std::cmp::Ordering::Greater,
-            EpisodeSpecial::Special(_) => std::cmp::Ordering::Less,
+            EpisodeKind::Numbered(_) => std::cmp::Ordering::Greater,
+            EpisodeKind::Special(_) => std::cmp::Ordering::Less,
         }
 
         //use std::cmp::Ordering;
@@ -100,7 +102,7 @@ impl Episode {
         let special_iter = REG_SPECIAL.find(filename);
         if let Some(i) = special_iter {
             let episode_str = i.as_str().to_owned();
-            let ep = EpisodeSpecial::Special(episode_str);
+            let ep = EpisodeKind::Special(episode_str);
             return Episode {
                 dir_name: filename.to_owned(),
                 ep,
@@ -138,7 +140,7 @@ impl Episode {
 
         Episode {
             dir_name: filename.to_owned(),
-            ep: EpisodeSpecial::EpS(EpisodeSeason {
+            ep: EpisodeKind::Numbered(EpisodeNumbered {
                 ep,
                 s,
             })
