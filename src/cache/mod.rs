@@ -1,6 +1,6 @@
 mod auto;
 
-use std::{fs, ops::Sub, path::Path, thread, str::FromStr};
+use std::{fs, ops::Sub, path::Path, str::FromStr, thread};
 
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
@@ -45,7 +45,6 @@ impl PartialOrd for EpisodeNumbered {
         }
     }
 }
-
 
 impl Eq for EpisodeNumbered {}
 
@@ -180,25 +179,20 @@ impl<'cache> Cache<'cache> {
                         d.file_type().is_file()
                             && d.path()
                                 .extension()
-                                .map(|e| e == "mkv" || e == "mp4" || e == "ts")
+                                .map(|e| matches!(e.to_str().unwrap(), "mkv" | "mp4" | "ts"))
                                 .unwrap_or(false)
                     })
                     .filter_map(|path| {
-                        let episode = Episode::from_str(path.file_name().to_str().unwrap()).ok()?;
-                        let mut anime_directory = path.path().parent().unwrap();
+                        let episode = Episode::from_str(path.file_name().to_str()?).ok()?;
+                        let mut anime_directory = path.path().parent()?;
 
                         // Walk to parent directory
                         for _ in 0..path.depth().sub(2) {
-                            anime_directory = anime_directory.parent().unwrap();
+                            anime_directory = anime_directory.parent()?;
                         }
                         Some((
-                            path.path().to_str().unwrap().to_owned(),
-                            anime_directory
-                                .file_name()
-                                .unwrap()
-                                .to_str()
-                                .unwrap()
-                                .to_owned(),
+                            path.path().to_str()?.to_owned(),
+                            anime_directory.file_name()?.to_str()?.to_owned(),
                             episode.ep,
                         ))
                     })
