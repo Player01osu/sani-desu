@@ -24,7 +24,7 @@ lazy_static! {
     static ref REG_EPS: Regex = Regex::new(r#"(?:(?:^|S|s)(?P<s>\d{2}))?(?:_|x|E|e|EP|ep| )(?P<e>\d{1,2})(?:.bits|_| |-|\.|v|$)"#).unwrap();
     static ref REG_PARSE_OUT: Regex = Regex::new(r#"(x256|x265|\d{4}|\d{3})|10.bits"#).unwrap();
     static ref REG_SPECIAL: Regex =
-        Regex::new(r#"(.*OVA.*\.|NCED.*? |NCOP.*? |(-|_| )ED.*?(-|_| )|(-|_| )OP.*?)"#).unwrap();
+        Regex::new(r#".*OVA.*\.|NCED.*? |NCOP.*? |(-|_| )(ED|OP|SP|no-credit_opening|no-credit_ending).*?(-|_| )"#).unwrap();
 }
 
 pub fn dmenu(args: &[String], pipe: &str) -> Output {
@@ -125,7 +125,7 @@ impl<'setup> Sani<'setup> {
 
         if ep_sel.is_empty() {
             self.state = AppState::ShowSelect;
-            return ;
+            return;
         }
 
         match self.file_path(ep_sel) {
