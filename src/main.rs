@@ -281,6 +281,7 @@ impl Sani {
         self.database
             .update_watched(&anime, watched.clone(), episode_map)
             .unwrap();
+        self.anime_list = valid_anime_list(&self.database, CONFIG.anime_dir.as_slice());
     }
 }
 
