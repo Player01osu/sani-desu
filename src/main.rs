@@ -195,7 +195,9 @@ impl Sani {
                                 .next_episode_raw((*season, *episode), &episodes)
                                 .map(|v| (*v).clone());
                         }
-                        _ => (),
+                        _ => {
+                            current_anime.next = None;
+                        }
                     }
                     current_anime.current = v;
                     self.watching()
