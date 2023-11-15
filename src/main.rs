@@ -60,16 +60,12 @@ struct Sani {
     database: Database,
     current_anime: Option<Anime>,
     string_buf: String,
-    valid_anime: BTreeSet<String>,
+    anime_list: Box<[String]>,
 }
 
-impl Sani {
-    fn new() -> Self {
-        let db_file = format!("{}/anime-database.db", ENV.cache.as_str());
-        let wait_thread = !Path::new(&db_file).exists();
-        let database = Database::new(&db_file, CONFIG.anime_dir.clone()).unwrap();
-        let valid_anime = CONFIG
-            .anime_dir
+fn valid_anime_list(db: &Database, anime_dir: &[String]) -> Box<[String]> {
+    let valid_anime =
+        anime_dir
             .iter()
             .filter_map(|s| read_dir(s).ok())
             .fold(BTreeSet::new(), |mut acc, d| {
@@ -83,6 +79,20 @@ impl Sani {
                 );
                 acc
             });
+    db.animes()
+        .unwrap()
+        .into_iter()
+        .filter(|v| valid_anime.contains(*v))
+        .map(|v| v.to_string())
+        .collect::<Box<[String]>>()
+}
+
+impl Sani {
+    fn new() -> Self {
+        let db_file = format!("{}/anime-database.db", ENV.cache.as_str());
+        let wait_thread = !Path::new(&db_file).exists();
+        let database = Database::new(&db_file, CONFIG.anime_dir.clone()).unwrap();
+        let anime_list = valid_anime_list(&database, CONFIG.anime_dir.as_slice());
 
         if wait_thread {
             database.init_db().unwrap();
@@ -95,7 +105,7 @@ impl Sani {
             database,
             current_anime: None,
             string_buf: String::new(),
-            valid_anime,
+            anime_list,
         }
     }
 
@@ -133,14 +143,7 @@ impl Sani {
     }
 
     fn select_show(&mut self) -> Exit {
-        let anime_list = self
-            .database
-            .animes()
-            .unwrap()
-            .into_iter()
-            .filter(|v| self.valid_anime.contains(*v))
-            .map(|v| v.to_string())
-            .collect::<Box<[String]>>();
+        let anime_list = &self.anime_list;
         let anime_str = anime_list.join("\n");
         let output = dmenu(&ARGS.args, anime_str.trim());
 
