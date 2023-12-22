@@ -76,18 +76,23 @@ fn anime_exist_list(anime_dir: &[String]) -> BTreeSet<String> {
         })
 }
 
+fn update_anime_str(database: &mut Database, anime_exist: &BTreeSet<String>) -> String {
+    database
+        .animes()
+        .unwrap()
+        .iter()
+        .filter(|(s, _)| anime_exist.contains(*s))
+        .map(|(name, _)| (*name).to_owned())
+        .collect::<Vec<_>>() // TODO: Maybe don't collect here
+        .join("\n")
+}
+
 impl Sani {
+
     fn new() -> Self {
         let mut database = Database::new(DB_FILE.as_str(), CONFIG.anime_dir.clone()).unwrap();
         let anime_exist = anime_exist_list(CONFIG.anime_dir.as_slice());
-        let anime_str = database
-            .animes()
-            .unwrap()
-            .iter()
-            .filter(|(s, _)| anime_exist.contains(*s))
-            .map(|(name, _)| (*name).to_owned())
-            .collect::<Vec<_>>() // TODO: Maybe don't collect here
-            .join("\n");
+        let anime_str = update_anime_str(&mut database, &anime_exist);
         Self {
             database,
             string_buf: String::new(),
@@ -199,6 +204,7 @@ impl Sani {
                 .1
                 .update_watched(episode)
                 .unwrap();
+            self.anime_str = update_anime_str(&mut self.database, &self.anime_exist);
             break;
         }
         self.select_ep(show_name)
