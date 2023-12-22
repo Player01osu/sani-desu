@@ -3,18 +3,22 @@ mod setup;
 
 use anime_database_lib::database::Database;
 use anime_database_lib::episode::Episode;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use args::Args;
 use lazy_static::lazy_static;
 use setup::{Config, EnvVars};
 use std::collections::BTreeSet;
-use std::fs::read_dir;
+use std::fs::{read_dir, File};
+use std::io::Read;
+use std::path::Path;
 use std::process::Output;
+use std::thread;
 use std::{
     io::Write,
     process::{self, Command, Stdio},
 };
 
+use anyhow::anyhow;
 use rayon::prelude::*;
 
 lazy_static! {
@@ -25,6 +29,8 @@ lazy_static! {
 }
 
 type Exit = Result<i32, i32>;
+
+const LOCKFILE_PATH: &'static str = "/tmp/sani.lock";
 
 pub fn dmenu(args: &[String], pipe: &str) -> Output {
     let mut dmenu = Command::new("dmenu")
@@ -87,8 +93,32 @@ fn update_anime_str(database: &mut Database, anime_exist: &BTreeSet<String>) -> 
         .join("\n")
 }
 
-impl Sani {
+fn create_lockfile() -> Result<()> {
+    if Path::new(LOCKFILE_PATH).exists() {
+        let mut pid = String::new();
+        let mut f = File::open(LOCKFILE_PATH)?;
+        f.read_to_string(&mut pid)?;
+        let fail_msg =
+            format!("{pid}:Instance of sani is already running or previous instance failed unexpectedly: {LOCKFILE_PATH}");
 
+        return Err(anyhow!(fail_msg));
+    }
+    let mut lockfile = File::create(LOCKFILE_PATH)
+        .with_context(|| format!("Failed to create lockfile: {LOCKFILE_PATH}"))?;
+
+    write!(&mut lockfile, "{}", std::process::id())
+        .with_context(|| format!("Failed to write to lockfile: {LOCKFILE_PATH}"))?;
+
+    lockfile.metadata()?.permissions().set_readonly(true);
+    Ok(())
+}
+
+fn remove_lockfile() -> Result<()> {
+    std::fs::remove_file(LOCKFILE_PATH)?;
+    Ok(())
+}
+
+impl Sani {
     fn new() -> Self {
         let mut database = Database::new(DB_FILE.as_str(), CONFIG.anime_dir.clone()).unwrap();
         let anime_exist = anime_exist_list(CONFIG.anime_dir.as_slice());
@@ -101,21 +131,20 @@ impl Sani {
         }
     }
 
-    fn lock_file(&self) -> Result<(), String> {
-        Ok(())
-    }
-
     pub fn start() -> Exit {
+        let t1 = thread::spawn(|| create_lockfile());
         let mut app = Sani::new();
-        match app.lock_file() {
-            Ok(()) => (),
-            Err(e) => {
+        match t1.join() {
+            Ok(Ok(())) => app.select_show(),
+            Ok(Err(e)) => {
                 eprintln!("{e}");
-                return Err(exitcode::OSFILE);
+                Err(exitcode::OSFILE)
+            }
+            Err(e) => {
+                eprintln!("{e:#?}");
+                Err(exitcode::OSFILE)
             }
         }
-
-        app.select_show()
     }
 
     fn select_show(&mut self) -> Exit {
@@ -214,6 +243,7 @@ impl Sani {
         match exitcode {
             exitcode::OK => {
                 self.database.write(DB_FILE.as_str()).unwrap();
+                remove_lockfile().unwrap();
                 Ok(exitcode::OK)
             }
             _ => Err(exitcode),
