@@ -7,6 +7,7 @@ use std::{
 use super::{Config, EnvVars};
 
 impl Config {
+    // TODO: Arbitrary dmenu arguments
     fn parse(&mut self) {
         if let Some(v) = &self.dmenu_settings.font {
             if v.is_empty() {

@@ -1,7 +1,7 @@
 mod args;
 mod setup;
 
-use anime_database_lib::database::{Database, EpisodeMap};
+use anime_database_lib::database::Database;
 use anime_database_lib::episode::Episode;
 use anyhow::Result;
 use args::Args;
@@ -9,17 +9,19 @@ use lazy_static::lazy_static;
 use setup::{Config, EnvVars};
 use std::collections::BTreeSet;
 use std::fs::read_dir;
-use std::path::Path;
 use std::process::Output;
 use std::{
     io::Write,
     process::{self, Command, Stdio},
 };
 
+use rayon::prelude::*;
+
 lazy_static! {
     static ref ARGS: Args = Args::from(&CONFIG.dmenu_settings);
     static ref CONFIG: Config = Config::generate(&ENV);
     static ref ENV: EnvVars = EnvVars::new();
+    static ref DB_FILE: String = format!("{}/anime-database-migrating.db", ENV.cache.as_str());
 }
 
 type Exit = Result<i32, i32>;
@@ -49,63 +51,48 @@ fn parse_episode(s: &str, current: &Episode, next: &Option<Episode>) -> Option<E
     }
 }
 
-struct Anime {
-    name: String,
-    episodes: EpisodeMap,
-    current: Episode,
-    next: Option<Episode>,
-}
-
 struct Sani {
     database: Database,
-    current_anime: Option<Anime>,
     string_buf: String,
-    anime_list: Box<[String]>,
+    anime_str: String,
+    anime_exist: BTreeSet<String>,
 }
 
-fn valid_anime_list(db: &Database, anime_dir: &[String]) -> Box<[String]> {
-    let valid_anime =
-        anime_dir
-            .iter()
-            .filter_map(|s| read_dir(s).ok())
-            .fold(BTreeSet::new(), |mut acc, d| {
-                acc.append(
-                    &mut d
-                        .filter_map(|v| {
-                            v.ok()
-                                .and_then(|v| Some(v.file_name().to_str().unwrap().to_owned()))
-                        })
-                        .collect(),
-                );
-                acc
-            });
-    db.animes()
-        .unwrap()
-        .into_iter()
-        .filter(|v| valid_anime.contains(*v))
-        .map(|v| v.to_string())
-        .collect::<Box<[String]>>()
+fn anime_exist_list(anime_dir: &[String]) -> BTreeSet<String> {
+    anime_dir
+        .iter()
+        .filter_map(|s| read_dir(s).ok())
+        .fold(BTreeSet::new(), |mut acc, d| {
+            acc.append(
+                &mut d
+                    .par_bridge()
+                    .filter_map(|v| {
+                        v.ok()
+                            .and_then(|v| Some(v.file_name().to_str().unwrap().to_owned()))
+                    })
+                    .collect(),
+            );
+            acc
+        })
 }
 
 impl Sani {
     fn new() -> Self {
-        let db_file = format!("{}/anime-database.db", ENV.cache.as_str());
-        let wait_thread = !Path::new(&db_file).exists();
-        let database = Database::new(&db_file, CONFIG.anime_dir.clone()).unwrap();
-        let anime_list = valid_anime_list(&database, CONFIG.anime_dir.as_slice());
-
-        if wait_thread {
-            database.init_db().unwrap();
-            database.update().unwrap();
-        } else {
-            database.threaded_update();
-        }
-
+        let mut database = Database::new(DB_FILE.as_str(), CONFIG.anime_dir.clone()).unwrap();
+        let anime_exist = anime_exist_list(CONFIG.anime_dir.as_slice());
+        let anime_str = database
+            .animes()
+            .unwrap()
+            .iter()
+            .filter(|(s, _)| anime_exist.contains(*s))
+            .map(|(name, _)| (*name).to_owned())
+            .collect::<Vec<_>>() // TODO: Maybe don't collect here
+            .join("\n");
         Self {
             database,
-            current_anime: None,
             string_buf: String::new(),
-            anime_list,
+            anime_str,
+            anime_exist,
         }
     }
 
@@ -126,25 +113,8 @@ impl Sani {
         app.select_show()
     }
 
-    fn current_anime(&mut self, show_name: String) {
-        let episodes = self.database.episodes(&show_name).unwrap();
-        let current = self.database.current_episode(&show_name).unwrap();
-        let next = self
-            .database
-            .next_episode_raw(current, &episodes)
-            .map(|v| (*v).clone());
-
-        self.current_anime = Some(Anime {
-            name: show_name,
-            episodes,
-            current: current.into(),
-            next,
-        });
-    }
-
     fn select_show(&mut self) -> Exit {
-        let anime_list = &self.anime_list;
-        let anime_str = anime_list.join("\n");
+        let anime_str = &self.anime_str;
         let output = dmenu(&ARGS.args, anime_str.trim());
 
         let binding = String::from_utf8(output.stdout).unwrap();
@@ -152,28 +122,31 @@ impl Sani {
 
         if show_name.is_empty() {
             self.quit(exitcode::OK)
-        } else if anime_list.contains(&show_name) {
-            self.current_anime(show_name);
-            self.select_ep()
         } else {
-            self.select_show()
+            self.select_ep(show_name)
         }
     }
 
-    fn select_ep(&mut self) -> Exit {
+    fn select_ep(&mut self, show_name: String) -> Exit {
         self.string_buf.clear();
-        let current_anime = match self.current_anime {
-            Some(ref v) => v,
+        let anime = self.database.animes().unwrap();
+        let anime = match anime
+            .iter()
+            .filter(|(s, _)| self.anime_exist.contains(*s))
+            .into_iter()
+            .find(|(v, _)| show_name.eq(*v))
+        {
+            Some((_, v)) => v,
             None => {
                 return self.select_show();
             }
         };
-        let episodes = &current_anime.episodes;
-        let current = &current_anime.current;
-        let next = &current_anime.next;
+        let episodes = &anime.episodes();
+        let current = &anime.current_episode();
+        let next = &anime.next_episode().unwrap();
         let buf = &mut self.string_buf;
 
-        fill_string(buf, episodes.keys(), current, next.as_ref());
+        fill_string(buf, episodes.iter().map(|(v, _)| v), current, next.as_ref());
         let episodes_string = self.string_buf.trim();
         let output = dmenu(&ARGS.args, episodes_string);
         let binding = String::from_utf8(output.stdout).unwrap();
@@ -184,41 +157,20 @@ impl Sani {
         }
 
         match parse_episode(selected, current, next) {
-            Some(v) => match episodes.get(&v) {
-                Some(_) => {
-                    let current_anime = self.current_anime.as_mut().expect("Should not be empty");
-                    let episodes = &current_anime.episodes;
-                    match &v {
-                        Episode::Numbered { season, episode } => {
-                            current_anime.next = self
-                                .database
-                                .next_episode_raw((*season, *episode), &episodes)
-                                .map(|v| (*v).clone());
-                        }
-                        _ => {
-                            current_anime.next = None;
-                        }
-                    }
-                    current_anime.current = v;
-                    self.watching()
+            Some(v) => match episodes.iter().find(|(ep, _)| v.eq(ep)) {
+                Some((_, paths)) => {
+                    let paths = paths.to_owned();
+                    self.watching(show_name, v, &paths)
                 }
-                None => self.select_ep(),
+                None => self.select_ep(show_name),
             },
-            None => self.select_ep(),
+            None => self.select_ep(show_name),
         }
     }
 
-    fn watching(&mut self) -> Exit {
-        let current_anime = match self.current_anime {
-            Some(ref v) => v,
-            None => {
-                eprintln!("Should not be possible: current anime should exist");
-                return self.select_show();
-            }
-        };
-
-        for episode in &current_anime.episodes[&current_anime.current] {
-            let args: Vec<&str> = vec![&episode];
+    fn watching(&mut self, show_name: String, episode: Episode, paths: &[String]) -> Exit {
+        for path in paths {
+            let args: Vec<&str> = vec![&path];
 
             let status = Command::new("mpv")
                 .args(&args)
@@ -230,15 +182,34 @@ impl Sani {
                 continue;
             }
 
-            self.write_cache();
+            // TODO: It has to look up again when it already
+            // did in `select_ep`.
+            //
+            // Can't pass `&mut Anime` into here because it's
+            // being mutably borrowed by `self` as well.
+            //
+            // Would preferrably not have to keep looking up
+            // `Anime` again.
+            self.database
+                .animes()
+                .unwrap()
+                .iter_mut()
+                .find(|(s, _)| show_name.eq(*s))
+                .expect("You just played it...")
+                .1
+                .update_watched(episode)
+                .unwrap();
             break;
         }
-        self.select_ep()
+        self.select_ep(show_name)
     }
 
-    fn quit(&self, exitcode: i32) -> Exit {
+    fn quit(&mut self, exitcode: i32) -> Exit {
         match exitcode {
-            exitcode::OK => Ok(exitcode::OK),
+            exitcode::OK => {
+                self.database.write(DB_FILE.as_str()).unwrap();
+                Ok(exitcode::OK)
+            }
             _ => Err(exitcode),
         }
     }
@@ -262,26 +233,6 @@ fn fill_string<'a>(
 
     for episode in episodes {
         buf.push_str(&format!("{episode}\n",));
-    }
-}
-
-impl Sani {
-    fn write_cache(&mut self) {
-        let current_anime = match self.current_anime {
-            Some(ref v) => v,
-            None => {
-                eprintln!("Should not be possible: current anime should exist");
-                return;
-            }
-        };
-        let anime = &current_anime.name;
-        let watched = &current_anime.current;
-        let episode_map = &current_anime.episodes;
-
-        self.database
-            .update_watched(&anime, watched.clone(), episode_map)
-            .unwrap();
-        self.anime_list = valid_anime_list(&self.database, CONFIG.anime_dir.as_slice());
     }
 }
 

@@ -15,3 +15,4 @@ regex = "1.10.2"
 serde = { version = "1.0.192", features = ["derive"] }
 serde_yaml = "0.9.27"
 anime-database-lib = { git = "https://github.com/Player01osu/anime-database-lib" }
+rayon = "1.8.0"
