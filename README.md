@@ -8,7 +8,6 @@ Keep track of and watch locally stored shows with this program.
 ### Requirements
 
 * rustc 1.65.0
-* sqlite3
 * dmenu
 * mpv
 
